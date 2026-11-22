@@ -7,18 +7,19 @@ const b64d=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
 /* Les URL signées renvoyées par GitHub sont réutilisées : pas d'appel API à chaque morceau */
 const urlCache=new Map();
 async function getRange(cfg,p,lo,hi,sig){
- const h={Range:`bytes=${lo}-${hi}`};
+ const h={Range:`bytes=${lo}-${hi}`};let last='';
  for(let t=0;t<3;t++){
   let r;const c=urlCache.get(p.id);
-  if(c&&Date.now()-c.t<240000){try{r=await fetch(c.u,{headers:h,signal:sig})}catch(e){if(sig&&sig.aborted)throw e}}
+  if(c&&Date.now()-c.t<240000){try{r=await fetch(c.u,{headers:h,signal:sig})}catch(e){if(sig&&sig.aborted)throw e;last='lien signé : '+e.message}}
   if(!r||r.status!=206){
-   r=await fetch(`https://api.github.com/repos/${cfg.repo}/releases/assets/${p.id}`,{headers:{Authorization:'Bearer '+cfg.tok,Accept:'application/octet-stream',...h},signal:sig});
+   try{r=await fetch(`https://api.github.com/repos/${cfg.repo}/releases/assets/${p.id}`,{headers:{Authorization:'Bearer '+cfg.tok,Accept:'application/octet-stream',...h},signal:sig})}
+   catch(e){if(sig&&sig.aborted)throw e;last='API GitHub : '+e.message+' (blocage CORS probable)';continue}
    if(r.status==206)urlCache.set(p.id,{u:r.url,t:Date.now()});
   }
   if(r.status==206)return new Uint8Array(await r.arrayBuffer());
-  urlCache.delete(p.id);
+  last='statut HTTP '+r.status;urlCache.delete(p.id);
  }
- throw Error('Lecture impossible (plage d\'octets refusée)');
+ throw Error('Lecture impossible ('+last+')');
 }
 
 /* Octets bruts [s,e] du fichier logique = parties mises bout à bout (lues en parallèle si on franchit une frontière) */
