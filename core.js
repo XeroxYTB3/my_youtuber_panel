@@ -192,12 +192,17 @@ async function noRange(a){const cfg=await prep(a),raws=[];
  const type=a.mime||'video/mp4';if(!a.enc)return new Blob(raws,{type});
  const raw=new Uint8Array(raws.reduce((x,y)=>x+y.length,0));let o=0;for(const x of raws){raw.set(x,o);o+=x.length}
  return new Blob([await decBlocks(cfg,a,raw,0)],{type})}
+async function probe(a){const cfg=await prep(a),o={};
+ try{const b=await fetchPlain(cfg,a,0,Math.min(65535,a.size-1));o.head=b.length;o.sig=String.fromCharCode(...b.slice(4,8))}catch(e){o.headErr=e.message}
+ try{const b=await fetchPlain(cfg,a,Math.max(0,a.size-65536),a.size-1);o.tail=b.length}catch(e){o.tailErr=e.message}
+ return o}
 async function vErr(id){
- const a=pr().assets.find(x=>x.id==id);if(!a||S.fb==id)return;S.fb=id;let st=0;
- try{st=(await fetch('_s/'+id,{headers:{Range:'bytes=0-1'}})).status}catch{}
- if(st==206)return msg("Le flux est bien reçu mais ce navigateur ne décode pas cette vidéo (souvent H.265/HEVC ou ProRes). Réexporte-la en H.264 ou télécharge-la.");
- if(a.size>1.6e9)return msg('Lecture en direct impossible (code '+st+'). Réglages → Diagnostic lecture, puis envoie-moi le résultat.');
- try{msg('Lecture en direct impossible : mode secours (chargement complet)…');const b=await noRange(a);
+ const a=pr().assets.find(x=>x.id==id);if(!a||S.fb==id)return;S.fb=id;
+ let o;try{o=await probe(a)}catch(e){o={headErr:e.message}}
+ if(o.headErr||o.tailErr)return msg('Lecture impossible : '+(o.headErr||o.tailErr)+' — Réglages → Diagnostic lecture.');
+ if(!/ftyp|moov|mdat|free|wide|skip/.test(o.sig||''))return msg("Les octets reçus ne ressemblent pas à un MP4 (parties dans le mauvais ordre ou corrompues). Renvoie le fichier.");
+ if(a.size>1.6e9)return msg("Les données arrivent correctement mais le lecteur échoue. Réglages → Diagnostic lecture, puis envoie-moi le résultat.");
+ try{msg('Mode secours (chargement complet)…');const b=await noRange(a);
   $('#pl').innerHTML=`<video controls autoplay playsinline src="${URL.createObjectURL(b)}" style="width:100%"></video>`;msg('Mode secours actif')}catch(e){msg(e.message)}}
 async function diag(){
  const o=[],L=(k,v)=>{o.push(k+' : '+v);$('#dg').textContent=o.join('\n')};
@@ -211,6 +216,7 @@ async function diag(){
  catch(e){L('Lecture par plages','BLOQUÉE par le navigateur : '+e.message)}
  try{const g=await navigator.serviceWorker.getRegistration();L('Service worker enregistré',g?'oui ('+g.scope+')':'non');L('Service worker actif ici',navigator.serviceWorker.controller?'oui':'non (recharge la page)')}catch(e){L('Service worker',e.message)}
  if(a.enc)L('Clé de chiffrement',S.key?'chargée':'MANQUANTE');
- try{await prep(a);L('Service worker sert le fichier',(await fetch('_s/'+a.id,{headers:{Range:'bytes=0-1'}})).status+' (attendu 206)')}catch(e){L('Service worker sert le fichier','ERREUR '+e.message)}
+ try{const o=await probe(a);L('Lecture du début du fichier',o.headErr?'ERREUR '+o.headErr:o.head+' octets, signature "'+o.sig+'" '+(/ftyp/.test(o.sig)?'(MP4 OK)':'(inattendue)'));L('Lecture de la fin du fichier',o.tailErr?'ERREUR '+o.tailErr:o.tail+' octets OK')}catch(e){L('Lecture des octets','ERREUR '+e.message)}
+ try{const r=await fetch('_s/'+a.id,{headers:{Range:'bytes=0-65535'}}),b=await r.arrayBuffer();L('Service worker (octets réellement reçus)',r.status+', '+b.byteLength+' octets')}catch(e){L('Service worker (octets réellement reçus)','ERREUR '+e.message)}
  const v=document.createElement('video');L('Navigateur lit H.264',v.canPlayType('video/mp4; codecs="avc1.640028"')||'non');L('Navigateur lit H.265/HEVC',v.canPlayType('video/mp4; codecs="hvc1.1.6.L120.B0"')||'non');
  L('Fin',"copie ce texte et envoie-le moi")}
