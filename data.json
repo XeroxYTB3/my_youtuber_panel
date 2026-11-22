@@ -1,1 +1,1 @@
-{"users":{"XeroxYTB3":"admin"},"projects":[{"id":"1zqxo9e","title":"Test","desc":"","tags":"","status":"Idée","editors":[],"assets":[],"com":[]}],"events":[],"log":[{"at":1795308232011,"by":"XeroxYTB3","t":"Projet créé : Test","p":""}]}
+{"users":{"XeroxYTB3":"admin"},"projects":[{"id":"1zqxo9e","title":"Test","desc":"","tags":"","status":"Tournage","editors":[],"assets":[],"com":[]}],"events":[],"log":[{"at":1795308237217,"by":"XeroxYTB3","t":"Statut → Tournage","p":"1zqxo9e"},{"at":1795308232011,"by":"XeroxYTB3","t":"Projet créé : Test","p":""}]}
