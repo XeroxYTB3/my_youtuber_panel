@@ -244,7 +244,7 @@ async function vErr(id){
   $('#pl').innerHTML=`<video controls autoplay playsinline src="${URL.createObjectURL(b)}" style="width:100%"></video>`;msg('Mode secours actif')}catch(e){msg(e.message)}}
 async function diag(){
  const o=[],L=(k,v)=>{o.push(k+' : '+v);$('#dg').textContent=o.join('\n')};
- L('Version du panel','v5 — lecteur '+(typeof KINDS!='undefined'?'multi-méthodes (à jour)':'ANCIEN : reader.js pas à jour'));
+ L('Version du panel','v5b — lecteur '+(typeof KINDS!='undefined'?'multi-méthodes (à jour)':'ANCIEN : reader.js pas à jour'));
  L('Page sécurisée (https)',isSecureContext?'oui':'NON');L('Service worker supporté',('serviceWorker' in navigator)?'oui':'NON');
  const a=S.d.projects.flatMap(p=>p.assets).find(()=>true);
  if(!a)return L('Fichier de test',"aucun : uploade d'abord un petit fichier");
@@ -266,9 +266,9 @@ async function diag(){
 async function testStore(){
  const o=[],L=(k,v)=>{o.push(k+' : '+v);$('#dg').textContent=o.join('\n')};let st=null;
  try{
-  L('Version stockage','v5 (dépôts GitHub + raw.githubusercontent.com)');
+  L('Version stockage','v5b (dépôts GitHub + raw.githubusercontent.com)');
   st=await mkRepo('pnl-test-'+uid());L('1. Création d\'un dépôt de test','OK ('+st.name+')');
-  const data=crypto.getRandomValues(new Uint8Array(1048576)),sha=await blobSafe(st.name,new Blob([data]),()=>{});
+  const data=new Uint8Array(1048576);for(let i=0;i<data.length;i+=65536)crypto.getRandomValues(data.subarray(i,i+65536));const sha=await blobSafe(st.name,new Blob([data]),()=>{});
   const c=await commitBatch(st,[{path:'c/test.bin',sha}]);L('2. Envoi de 1 Mo (API Git)','OK');
   const u=`https://raw.githubusercontent.com/${S.me}/${st.name}/${c}/c/test.bin`;let done=false;
   for(let t=0;t<6&&!done;t++){
