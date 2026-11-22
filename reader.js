@@ -6,6 +6,7 @@ const b64d=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
 
 /* Les URL signées renvoyées par GitHub sont réutilisées : pas d'appel API à chaque morceau */
 const urlCache=new Map(),partCache=new Map(),KINDS=['auth+range','anon+range','auth+full','anon+full'];let okKind=null;
+const pk=p=>p.id||(p.c+'/'+p.p);
 /* 4 façons de lire un morceau ; la première qui marche est mémorisée */
 async function viaKind(kind,cfg,p,lo,hi,sig){
  const range=kind.endsWith('range'),h={Accept:'application/octet-stream'};
@@ -19,12 +20,28 @@ async function viaKind(kind,cfg,p,lo,hi,sig){
   urlCache.set(p.id,{u:r.url,t:Date.now()});return new Uint8Array(await r.arrayBuffer());
  }
  if(p.size>64*1048576)throw Error('partie trop grosse pour ce mode');
- let c=partCache.get(p.id);
+ let c=partCache.get(pk(p));
  if(!c){const r=await fetch(api,{headers:h,signal:sig});if(!r.ok)throw Error('statut HTTP '+r.status);c=new Uint8Array(await r.arrayBuffer());
-  partCache.set(p.id,c);if(partCache.size>4)partCache.delete(partCache.keys().next().value)}
+  partCache.set(pk(p),c);if(partCache.size>4)partCache.delete(partCache.keys().next().value)}
+ return c.subarray(lo,hi+1);
+}
+/* Parties stockées dans un dépôt GitHub public : lecture via raw.githubusercontent.com (sans jeton) */
+async function viaGit(p,lo,hi,sig){
+ const u=`https://raw.githubusercontent.com/${p.o}/${p.r}/${p.c}/${p.p}`;
+ let c=partCache.get(pk(p));
+ if(!c){
+  const r=await fetch(u,{headers:{Range:`bytes=${lo}-${hi}`},signal:sig});
+  if(r.status==206)return new Uint8Array(await r.arrayBuffer());
+  if(r.status!=200)throw Error('statut HTTP '+r.status);
+  c=new Uint8Array(await r.arrayBuffer());partCache.set(pk(p),c);if(partCache.size>4)partCache.delete(partCache.keys().next().value);
+ }
  return c.subarray(lo,hi+1);
 }
 async function getRange(cfg,p,lo,hi,sig){
+ if(p.r){
+  let err;for(let t=0;t<3;t++){try{return await viaGit(p,lo,hi,sig)}catch(e){if(sig&&sig.aborted)throw e;err=e;await new Promise(r=>setTimeout(r,400*(t+1)))}}
+  throw Error('Lecture impossible ('+err.message+')');
+ }
  const order=okKind?[okKind,...KINDS.filter(k=>k!=okKind)]:KINDS,errs=[];
  for(const k of order){
   try{const b=await viaKind(k,cfg,p,lo,hi,sig);okKind=k;return b}
