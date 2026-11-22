@@ -1,3 +1,4 @@
+// v3
 /* Sert /_s/<id> au lecteur du navigateur : requêtes Range, déchiffrement, passage d'une partie à l'autre */
 importScripts('reader.js');
 self.addEventListener('install',()=>self.skipWaiting());
