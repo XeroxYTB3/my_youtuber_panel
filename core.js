@@ -76,7 +76,7 @@ function thumb(f){return new Promise(r=>{
  v.onloadeddata=()=>{v.currentTime=Math.min(1,(v.duration||2)/2)};v.onseeked=()=>fin(draw(v,v.videoWidth,v.videoHeight));v.onerror=()=>fin('');v.src=u})}
 
 /* ---- fichiers (Releases GitHub) ---- */
-const PART=32*1048576,BS=1048576,BPP=32,parts=a=>a.parts||[{id:a.id,size:a.size}];
+const PART=48*1048576,BS=1048576,BPP=48,parts=a=>a.parts||[{id:a.id,size:a.size}];
 const b64u=u=>btoa(String.fromCharCode(...u));
 const encOn=()=>!!S.key&&localStorage.enc=='1';
 const syncCfg=()=>idbSet('cfg',{repo:S.repo,tok:S.tok,key:S.key||null});
@@ -94,7 +94,7 @@ async function kSet(){const pw=$('#kp').value;if(!pw)return;
   await kUse(pw);msg('Clé enregistrée sur cet appareil');render()}catch(e){msg(e.message)}}
 const keyH=()=>`<div class="c"><h3 style="margin-top:0">Chiffrement</h3><p class="t">${S.d.k?"Activé pour l'équipe. Entre le mot de passe sur chaque appareil.":"Désactivé. L'admin choisit un mot de passe d'équipe, stocké nulle part : s'il est perdu, les fichiers chiffrés sont irrécupérables."}</p>
  <div class="row"><input id="kp" type="password" style="flex:1" placeholder="Mot de passe d'équipe"><button class="b" onclick="kSet()">${S.d.k?'Déverrouiller':'Activer'}</button></div>
- ${S.key?`<label class="row" style="margin-top:10px"><input type="checkbox" style="width:auto" ${localStorage.enc=='1'?'checked':''} onchange="localStorage.enc=this.checked?'1':'0'"> Chiffrer les nouveaux uploads</label><div class="t">État : déverrouillé sur cet appareil</div>`:''}</div><div class="c"><h3 style="margin-top:0">Diagnostic lecture</h3><p class="t">Si la vidéo ne démarre pas, lance ce test et copie le résultat.</p><div class="row"><button class="g b" onclick="diag()">Lancer le test</button><button class="b" onclick="testStore()">Tester le stockage GitHub</button></div><pre id="dg" style="white-space:pre-wrap;font-size:.8rem;margin:10px 0 0"></pre></div>`;
+ ${S.key?`<label class="row" style="margin-top:10px"><input type="checkbox" style="width:auto" ${localStorage.enc=='1'?'checked':''} onchange="localStorage.enc=this.checked?'1':'0'"> Chiffrer les nouveaux uploads</label><div class="t">État : déverrouillé sur cet appareil</div>`:''}</div><div class="c"><h3 style="margin-top:0">Diagnostic lecture</h3><p class="t">Si la vidéo ne démarre pas, lance ce test et copie le résultat.</p><div class="row"><button class="g b" onclick="diag()">Lancer le test</button><button class="b" onclick="testStore()">Tester le stockage GitHub</button></div><pre id="dg" style="white-space:pre-wrap;font-size:.8rem;margin:10px 0 0"></pre></div><div class="c"><h3 style="margin-top:0">Vitesse d'envoi</h3><p class="t">Nombre de morceaux envoyés en même temps (1 à 24). Plus haut = plus rapide si ta connexion suit, mais plus de mémoire.</p><label class="row"><span class="t">Envois en parallèle</span><input type="number" min="1" max="24" style="width:90px" value="${Math.min(24,Math.max(1,+localStorage.conc||12))}" onchange="localStorage.conc=this.value"></label></div>`;
 
 async function encPart(f,i,nonce){
  const s0=i*BPP*BS,e=Math.min(s0+BPP*BS,f.size),offs=[];for(let o=s0;o<e;o+=BS)offs.push(o);
@@ -114,16 +114,16 @@ async function ghj(path,body,method='POST'){
  }
  throw Error('GitHub refuse trop de requêtes : réessaie dans une heure');
 }
-function blobPost(r,b64,onp){return new Promise((res,rej)=>{const x=new XMLHttpRequest();x.open('POST',`${API}/repos/${S.me}/${r}/git/blobs`);
+function blobPost(r,body,onp){return new Promise((res,rej)=>{const x=new XMLHttpRequest();x.open('POST',`${API}/repos/${S.me}/${r}/git/blobs`);
  x.setRequestHeader('Authorization','Bearer '+S.tok);x.setRequestHeader('Accept','application/vnd.github+json');x.setRequestHeader('Content-Type','application/json');
  x.upload.onprogress=e=>onp(e.loaded/e.total);x.onload=()=>x.status<300?res(JSON.parse(x.responseText).sha):rej(Object.assign(Error('HTTP '+x.status),{st:x.status}));
- x.onerror=()=>rej(Error('Erreur réseau'));x.send(new Blob(['{"encoding":"base64","content":"',b64,'"}']))})}
-async function blobSafe(r,blob,onp){const b64=await toB64(blob);
- for(let t=0;t<12;t++){try{return await blobPost(r,b64,onp)}catch(e){if(t==11||(e.st&&e.st<500&&e.st!=403&&e.st!=429))throw e;await waitS(Math.min(300,30*(t+1))+Math.random()*10,'GitHub limite le rythme')}}}
+ x.onerror=()=>rej(Error('Erreur réseau'));x.send(body)})}
+async function blobSafe(r,blob,onp){let b64=await toB64(blob);const body=new Blob(['{"encoding":"base64","content":"',b64,'"}']);b64=null;
+ for(let t=0;t<6;t++){try{return await blobPost(r,body,onp)}catch(e){if(t==5||(e.st&&e.st<500&&e.st!=403&&e.st!=429))throw e;const w=20*(t+1);msg('Nouvelle tentative dans '+w+' s…');await sleep(w*1000)}}}
 async function mkRepo(name){
  const x=await ghj('/user/repos',{name,description:'Stockage Panel',private:false,auto_init:true}),br=x.default_branch||'main';
- for(let t=0;t<10;t++){const r=await gh(`/repos/${S.me}/${name}/git/ref/heads/${br}`);
-  if(r.ok){const head=(await r.json()).object.sha,c=await(await gh(`/repos/${S.me}/${name}/git/commits/${head}`)).json();return{name,br,head,tree:c.tree.sha}}await sleep(1500)}
+ for(let t=0;t<30;t++){const r=await gh(`/repos/${S.me}/${name}/git/ref/heads/${br}`);
+  if(r.ok){const head=(await r.json()).object.sha,c=await(await gh(`/repos/${S.me}/${name}/git/commits/${head}`)).json();return{name,br,head,tree:c.tree.sha}}await sleep(400)}
  throw Error('Dépôt de stockage introuvable après création');
 }
 async function commitBatch(st,items){
@@ -132,13 +132,13 @@ async function commitBatch(st,items){
  await ghj(`/repos/${S.me}/${st.name}/git/refs/heads/${st.br}`,{sha:c.sha},'PATCH');
  st.head=c.sha;st.tree=t.sha;return c.sha;
 }
-const CAP=2.5*1024**3,CONC=6;
+const CAP=2.5*1024**3,CONCDEF=12;
 async function up(kind,files){
  if(!encOn()&&!S.okPub){if(!confirm("Sans chiffrement, tes fichiers seront PUBLICS sur GitHub (dépôts publics). Continuer ? Active le chiffrement dans Réglages pour les protéger."))return;S.okPub=1}
  try{
   for(const f of files){
    const t0=Date.now(),E=encOn(),nonce=E?crypto.getRandomValues(new Uint8Array(8)):null,pp=E?BPP*BS:PART,n=Math.max(1,Math.ceil(f.size/pp)),
-    tot=f.size+(E?Math.ceil(f.size/BS)*16:0),per=Math.max(1,Math.floor(CAP/(pp+(E?BPP*16:0)))),nR=Math.ceil(n/per),aid=uid()+uid();
+    tot=f.size+(E?Math.ceil(f.size/BS)*16:0),per0=Math.max(1,Math.floor(CAP/(pp+(E?BPP*16:0)))),nR=Math.ceil(n/per0),per=Math.ceil(n/nR),aid=uid()+uid(),conc=Math.min(24,Math.max(1,+localStorage.conc||CONCDEF));
    const thP=thumb(f),repoP=Array.from({length:nR},(_,k)=>{const p=mkRepo(`pnl-${aid}-${k+1}`);p.catch(()=>{});return p});
    const items=Array.from({length:nR},()=>[]),res=new Array(n),loaded=new Array(n).fill(0);let next=0,tEnd=0;
    const show=()=>{const s2=loaded.reduce((x,y)=>x+y,0),sp=s2/((Date.now()-t0)/1000||1),left=sp>0?Math.round((tot-s2)/sp):0,el=$('#prog');
@@ -146,12 +146,12 @@ async function up(kind,files){
    const worker=async()=>{for(;;){const i=next++;if(i>=n)return;const k=Math.floor(i/per),st=await repoP[k],
      sl=E?await encPart(f,i,nonce):f.slice(i*PART,(i+1)*PART),sha=await blobSafe(st.name,sl,fr=>{loaded[i]=fr*sl.size;show()});
      loaded[i]=sl.size;items[k].push({path:`c/${String(i).padStart(5,'0')}.bin`,sha,size:sl.size,i})}};
-   await Promise.all(Array.from({length:Math.min(E?4:CONC,n)},worker));
+   await Promise.all(Array.from({length:Math.min(conc,n)},worker));
    tEnd=Date.now();msg('Finalisation…');
    await Promise.all(items.map(async(it,k)=>{const st=await repoP[k],c=await commitBatch(st,it);for(const x of it)res[x.i]={o:S.me,r:st.name,c,p:x.path,size:x.size}}));
    const th=await thP;
    await mut(d=>pr(d).assets.push({id:aid,parts:res,name:f.name,size:f.size,mime:f.type,enc:E?{n:b64u(nonce),bs:BS}:undefined,kind,by:S.me,at:Date.now(),th}),(kind=='final'?'Montage ajouté : ':'Rush ajouté : ')+f.name+(E?' 🔒':''));
-   const sec=(Date.now()-t0)/1000;msg(`Terminé : ${sz(f.size)} en ${sec.toFixed(0)} s (${(f.size/1e6/sec).toFixed(1)} Mo/s en moyenne)`);
+   const sec=(Date.now()-t0)/1000;msg(`Terminé : ${sz(f.size)} en ${sec.toFixed(0)} s (${(f.size/1e6/sec).toFixed(1)} Mo/s, ${Math.min(conc,n)} envois en parallèle)`);
   }
  }catch(e){msg(e.message)}
 }
