@@ -1,0 +1,25 @@
+# À placer dans le DÉPÔT DE DONNÉES, branche principale : .github/workflows/relay.yml
+# Le panel pousse des morceaux de fichiers sur une branche "up-*" ; ce workflow les
+# envoie en assets de la Release du projet (côté serveur GitHub, donc sans CORS), puis supprime la branche.
+name: relay
+on:
+  push:
+    branches: ['up-**']
+permissions:
+  contents: write
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Envoi vers la Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG=$(cat up/.tag)
+          find up -type f ! -name .tag | sort | while read -r f; do
+            echo "→ $f"
+            gh release upload "$TAG" "$f" --clobber
+          done
+          git push origin --delete "$GITHUB_REF_NAME"
