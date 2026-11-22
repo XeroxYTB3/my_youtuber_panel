@@ -35,7 +35,7 @@ async function mut(fn,label,pid){
 }
 async function login(){
  S.repo=$('#rp')?$('#rp').value.trim():S.repo;S.tok=$('#tk')?$('#tk').value.trim():S.tok;
- try{const u=await gh('/user');if(!u.ok)throw Error('Token invalide');S.me=(await u.json()).login;await load();await initKeys();
+ try{const u=await gh('/user');if(!u.ok)throw Error('Token invalide');S.me=(await u.json()).login;dbg('connecté :','@'+S.me);await load();await initKeys();
   if(!S.d.users[S.me])throw Error(`@${S.me} n'a pas accès : demande à l'admin de t'ajouter dans Équipe`);
   localStorage.repo=S.repo;localStorage.tok=S.tok;render();check();setInterval(check,60000)}
  catch(x){S.d=null;msg(x.message);render()}
@@ -100,25 +100,34 @@ async function encPart(f,i,nonce){const bl=[],s=i*BPP*BS,e=Math.min(s+BPP*BS,f.s
  for(let o=s,b=i*BPP;o<e;o+=BS,b++){const iv=new Uint8Array(12);iv.set(nonce);new DataView(iv.buffer).setUint32(8,b);
   bl.push(await crypto.subtle.encrypt({name:'AES-GCM',iv},S.key,await f.slice(o,Math.min(o+BS,e)).arrayBuffer()))}
  return new Blob(bl)}
-function xput(url,body,type,onp){return new Promise((res,rej)=>{const x=new XMLHttpRequest();x.open('POST',url);x.setRequestHeader('Authorization','Bearer '+S.tok);x.setRequestHeader('Content-Type',type);x.upload.onprogress=e=>onp(e.loaded);x.onload=()=>x.status<300?res(JSON.parse(x.responseText)):rej(Error('Upload refusé ('+x.status+')'));x.onerror=()=>rej(Error('Erreur réseau'));x.send(body)})}
+function xput(url,body,type,onp){return new Promise((res,rej)=>{const x=new XMLHttpRequest(),t0=Date.now(),tot=body.size||0;let ld=0;
+ const info=()=>`status=${x.status}, envoyé=${(ld/1e6).toFixed(1)}/${(tot/1e6).toFixed(1)} Mo, durée=${((Date.now()-t0)/1000).toFixed(1)}s, readyState=${x.readyState}, online=${navigator.onLine}`;
+ dbg('→ POST',url.split('?')[0].replace(/repos\/[^/]+\/[^/]+/,'repos/…'),'name='+decodeURIComponent((url.split('name=')[1]||'')),'taille='+tot,'type='+type);
+ x.open('POST',url);x.setRequestHeader('Authorization','Bearer '+S.tok);x.setRequestHeader('Content-Type',type);
+ x.upload.onprogress=e=>{ld=e.loaded;onp(e.loaded)};
+ x.onload=()=>{dbg('← réponse',x.status,x.responseText.slice(0,200));if(x.status<300)res(JSON.parse(x.responseText));else{let m='';try{m=JSON.parse(x.responseText).message}catch{}rej(Error('Upload refusé ('+x.status+') '+m))}};
+ x.onerror=()=>{dbg('✗ ERREUR RÉSEAU (onerror) —',info());rej(Error('Erreur réseau ['+info()+'] — ouvre F12 > Console ou le bouton 🐞'))};
+ x.ontimeout=()=>{dbg('✗ TIMEOUT —',info());rej(Error('Timeout ['+info()+']'))};
+ x.onabort=()=>{dbg('✗ ABANDON —',info());rej(Error('Upload annulé ['+info()+']'))};
+ x.send(body)})}
 async function up(kind,files){
  let p=pr();
  try{
   if(!p.rel){const r=await gh(`/repos/${S.repo}/releases`,{method:'POST',body:JSON.stringify({tag_name:'p-'+p.id,name:p.title})});if(!r.ok)throw Error('Création de la release impossible');const j=await r.json();await mut(d=>pr(d).rel=j.id);p=pr()}
   for(const f of files){
    const E=encOn(),nonce=E?crypto.getRandomValues(new Uint8Array(8)):null,pp=E?BPP*BS:PART,n=Math.max(1,Math.ceil(f.size/pp)),tot=f.size+(E?Math.ceil(f.size/BS)*16:0);
-   const th=await thumb(f),base=Date.now()+'-'+f.name.replace(/[^\w.-]/g,'_'),ps=[];let sent=0;
+   dbg('Fichier :',f.name,'|',f.type||'(type inconnu)','|',f.size,'octets | parties =',n,'| chiffré =',E);const th=await thumb(f),base=Date.now()+'-'+f.name.replace(/[^\w.-]/g,'_'),ps=[];let sent=0;
    for(let i=0;i<n;i++){
     msg(E?`Chiffrement partie ${i+1}/${n}…`:`Préparation partie ${i+1}/${n}…`);
     const sl=E?await encPart(f,i,nonce):(n>1?f.slice(i*PART,(i+1)*PART):f),name=n>1?`${base}.part${String(i+1).padStart(3,'0')}`:base;let j;
     for(let t=1;;t++){
      try{j=await xput(`https://uploads.github.com/repos/${S.repo}/releases/${p.rel}/assets?name=${encodeURIComponent(name)}`,sl,E?'application/octet-stream':(f.type||'application/octet-stream'),l=>{const el=$('#prog');if(el)el.innerHTML=`<div class="t">${E?'🔒 ':''}${esc(f.name)} — ${Math.round((sent+l)/tot*100)}%${n>1?` (partie ${i+1}/${n})`:''}</div><progress value="${sent+l}" max="${tot}"></progress>`});break}
-     catch(e){if(t>=3)throw e;msg('Nouvelle tentative, partie '+(i+1)+'…')}}
+     catch(e){dbg('tentative '+t+'/3 échouée :',e.message);if(t>=3)throw e;msg('Nouvelle tentative ('+t+'/3), partie '+(i+1)+'…');await new Promise(r=>setTimeout(r,1500*t))}}
     sent+=sl.size;ps.push({id:j.id,size:sl.size});
    }
    await mut(d=>pr(d).assets.push({id:ps[0].id,parts:(n>1||E)?ps:undefined,name:f.name,size:f.size,mime:f.type,enc:E?{n:b64u(nonce),bs:BS}:undefined,kind,by:S.me,at:Date.now(),th}),(kind=='final'?'Montage ajouté : ':'Rush ajouté : ')+f.name+(E?' 🔒':''));
   }msg('Upload terminé')
- }catch(e){msg(e.message)}
+ }catch(e){dbg('UPLOAD ÉCHEC :',e.message);msg(e.message)}
 }
 async function blob(id){const r=await gh(`/repos/${S.repo}/releases/assets/${id}`,{headers:{Accept:'application/octet-stream'}});if(!r.ok)throw Error('Téléchargement impossible');return r.blob()}
 async function swOk(){if(!('serviceWorker' in navigator))return false;
@@ -184,3 +193,42 @@ const ICP={p:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M
  s:'<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>',
  m:'<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>'};
 const IC=k=>`<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICP[k]}</svg>`;
+
+/* ---- DEBUG (bouton 🐞 en bas à droite) ---- */
+const DBG=[];
+function dbg(...a){const l=new Date().toTimeString().slice(0,8)+' '+a.map(x=>typeof x=='string'?x:JSON.stringify(x)).join(' ');DBG.push(l);if(DBG.length>400)DBG.shift();console.log('[panel]',...a);const t=document.querySelector('#dbgt');if(t){t.value=DBG.join('\n');t.scrollTop=t.scrollHeight}}
+window.addEventListener('error',e=>dbg('ERREUR JS :',e.message,(e.filename||'').split('/').pop()+':'+e.lineno));
+window.addEventListener('unhandledrejection',e=>dbg('PROMESSE REJETÉE :',String(e.reason&&e.reason.message||e.reason)));
+const dbgCopy=()=>navigator.clipboard.writeText(DBG.join('\n')).then(()=>msg('Debug copié')).catch(()=>{const t=$('#dbgt');t.select();document.execCommand('copy');msg('Debug copié')});
+async function diag(mb){
+ const ids=[];let rel=null,ok5=null,ok6=null,reach='?';
+ dbg('=== DIAGNOSTIC ===');dbg('UA :',navigator.userAgent);dbg('online :',navigator.onLine,'| origine :',location.origin);
+ dbg('token :',S.tok?S.tok.slice(0,S.tok.startsWith('github_pat_')?11:4)+'… ('+S.tok.length+' car.)':'AUCUN','| repo :',S.repo);
+ try{await fetch('https://uploads.github.com/',{mode:'no-cors',cache:'no-store'});reach='OK'}catch(e){reach='ÉCHEC ('+e.message+')'}
+ dbg('1) uploads.github.com joignable (no-cors) :',reach);
+ try{const r=await gh('/user');dbg('2) GET /user :',r.status,'| scopes =',r.headers.get('x-oauth-scopes'),'| quota restant =',r.headers.get('x-ratelimit-remaining'))}catch(e){dbg('2) GET /user ÉCHEC :',e.message)}
+ try{const r=await gh('/repos/'+S.repo),j=await r.json();dbg('3) dépôt :',r.status,{private:j.private,permissions:j.permissions,size_ko:j.size,branche:j.default_branch,archivé:j.archived,message:j.message})}catch(e){dbg('3) dépôt ÉCHEC :',e.message)}
+ try{const r=await gh(`/repos/${S.repo}/releases`,{method:'POST',body:JSON.stringify({tag_name:'debug-'+Date.now(),name:'debug',draft:true})}),j=await r.json();dbg('4) création release (brouillon) :',r.status,j.message||'OK');if(r.ok)rel=j.id}catch(e){dbg('4) release ÉCHEC :',e.message)}
+ if(rel){
+  const up0=`https://uploads.github.com/repos/${S.repo}/releases/${rel}/assets`,b=new Blob([new Uint8Array(1024)],{type:'application/octet-stream'});
+  try{const j=await xput(up0+'?name=debug1.bin',b,'application/octet-stream',()=>{});ids.push(j.id);ok5=true;dbg('5) upload XHR 1 Ko : OK')}catch(e){ok5=false;dbg('5) upload XHR 1 Ko : ÉCHEC —',e.message)}
+  try{const r=await fetch(up0+'?name=debug2.bin',{method:'POST',headers:{Authorization:'Bearer '+S.tok,'Content-Type':'application/octet-stream'},body:b}),j=await r.json();ok6=r.ok;if(r.ok)ids.push(j.id);dbg('6) upload fetch 1 Ko :',r.status,r.ok?'OK':JSON.stringify(j))}catch(e){ok6=false;dbg('6) upload fetch 1 Ko : ÉCHEC —',e.name+': '+e.message)}
+  if(mb){let last=-1;try{const j=await xput(up0+'?name=debug3.bin',new Blob([new Uint8Array(mb*1e6)],{type:'application/octet-stream'}),'application/octet-stream',l=>{const k=Math.floor(l/1e7);if(k!=last){last=k;dbg('   …',(l/1e6).toFixed(0)+' Mo envoyés')}});ids.push(j.id);dbg('7) upload XHR '+mb+' Mo : OK')}catch(e){dbg('7) upload XHR '+mb+' Mo : ÉCHEC —',e.message)}}
+  for(const i of ids)try{await gh(`/repos/${S.repo}/releases/assets/${i}`,{method:'DELETE'})}catch{}
+  try{await gh(`/repos/${S.repo}/releases/${rel}`,{method:'DELETE'});dbg('   (release de test supprimée)')}catch{}
+ }
+ let v;
+ if(!navigator.onLine)v='Le navigateur se dit hors ligne.';
+ else if(reach!='OK')v='uploads.github.com est injoignable : bloqueur de pub, antivirus, VPN, DNS ou réseau (pare-feu).';
+ else if(!rel)v="Impossible de créer la release : problème de token/droits (voir 2, 3 et 4), pas un problème d'upload.";
+ else if(ok5&&ok6)v="Petits fichiers OK : le réseau, le token et CORS fonctionnent."+(mb?' Voir le test '+mb+' Mo (7) pour la taille.':' Le problème vient de la taille du fichier ou de la stabilité de la connexion : relance avec « test 50 Mo ».');
+ else if(!ok5&&!ok6)v="Les uploads sont bloqués même en 1 Ko alors que le site est joignable : très probablement CORS (regarde F12 > Console, message « blocked by CORS policy »).";
+ else if(!ok5&&ok6)v='fetch() passe mais pas XHR : problème spécifique à XHR (extension ?).';
+ else v='XHR passe mais pas fetch().';
+ dbg('>>> VERDICT :',v);msg('Diagnostic terminé : voir 🐞');
+}
+(function(){const b=document.createElement('button');b.textContent='🐞';b.title='Debug';b.style.cssText='position:fixed;right:12px;bottom:12px;z-index:99998;width:42px;height:42px;border-radius:50%;border:0;background:#222;color:#fff;font-size:18px;opacity:.75;cursor:pointer';
+ b.onclick=()=>{let o=document.querySelector('#dbgo');if(o){o.remove();return}o=document.createElement('div');o.id='dbgo';o.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.88);padding:12px;display:flex;flex-direction:column;gap:8px';
+  o.innerHTML='<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="b" onclick="diag(0)">Diagnostic</button><button class="b" onclick="diag(50)">Diagnostic + test 50 Mo</button><button class="g b" onclick="dbgCopy()">Copier</button><button class="g b" onclick="document.querySelector(\'#dbgo\').remove()">Fermer</button></div><textarea id="dbgt" readonly style="flex:1;width:100%;font:12px monospace;background:#111;color:#ddd;border:0;padding:8px"></textarea>';
+  document.body.append(o);document.querySelector('#dbgt').value=DBG.join('\n')};document.body.append(b)})();
+dbg('core.js debug v2 chargé');
