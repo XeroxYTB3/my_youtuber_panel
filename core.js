@@ -106,53 +106,62 @@ function xput(url,body,type,onp){return new Promise((res,rej)=>{const x=new XMLH
  x.open('POST',url);x.setRequestHeader('Authorization','Bearer '+S.tok);x.setRequestHeader('Content-Type',type);
  x.upload.onprogress=e=>{ld=e.loaded;onp(e.loaded)};
  x.onload=()=>{dbg('← réponse',x.status,x.responseText.slice(0,200));if(x.status<300)res(JSON.parse(x.responseText));else{let m='';try{m=JSON.parse(x.responseText).message}catch{}rej(Error('Upload refusé ('+x.status+') '+m))}};
- x.onerror=()=>{dbg('✗ ERREUR RÉSEAU (onerror) —',info());rej(Error('Erreur réseau ['+info()+'] — ouvre F12 > Console ou le bouton 🐞'))};
+ x.onerror=()=>{dbg('✗ ERREUR RÉSEAU (onerror) —',info());rej(Error('Erreur réseau ['+info()+'] — voir F12 > Console'))};
  x.ontimeout=()=>{dbg('✗ TIMEOUT —',info());rej(Error('Timeout ['+info()+']'))};
  x.onabort=()=>{dbg('✗ ABANDON —',info());rej(Error('Upload annulé ['+info()+']'))};
  x.send(body)})}
 /* Upload 100 % GitHub : morceaux -> blobs (api.github.com, CORS OK) -> branche up-* -> workflow "relay" -> assets de la Release */
-const sleep=ms=>new Promise(r=>setTimeout(r,ms)),BATCH=6;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms)),BATCH=4,CC=()=>Math.max(1,Math.min(6,+localStorage.cc||3));
 async function ghj(path,method,body){const r=await gh(path,{method,body:body?JSON.stringify(body):undefined}),j=await r.json().catch(()=>({}));
  if(!r.ok)throw Error(method+' '+path.replace(/^\/repos\/[^/]+\/[^/]+/,'')+' → '+r.status+' '+(j.message||''));return j}
 const toB64=bl=>new Promise((res,rej)=>{const f=new FileReader();f.onload=()=>res(f.result.split(',')[1]);f.onerror=()=>rej(Error('Lecture du fichier impossible'));f.readAsDataURL(bl)});
 async function relayInstalled(){return (await gh(`/repos/${S.repo}/contents/.github/workflows/relay.yml`)).ok}
-async function pushBatch(tag,batch){
- const R='/repos/'+S.repo,br=(await ghj(R,'GET')).default_branch,ref=await ghj(`${R}/git/ref/heads/${br}`,'GET'),c=await ghj(`${R}/git/commits/${ref.object.sha}`,'GET'),
- tr=await ghj(`${R}/git/trees`,'POST',{base_tree:c.tree.sha,tree:[{path:'up/.tag',mode:'100644',type:'blob',content:tag},...batch.map(b=>({path:'up/'+b.name,mode:'100644',type:'blob',sha:b.sha}))]}),
- cm=await ghj(`${R}/git/commits`,'POST',{message:'up',tree:tr.sha,parents:[ref.object.sha]}),
+async function getBase(){const R='/repos/'+S.repo,br=(await ghj(R,'GET')).default_branch,ref=await ghj(`${R}/git/ref/heads/${br}`,'GET'),c=await ghj(`${R}/git/commits/${ref.object.sha}`,'GET');return{sha:ref.object.sha,tree:c.tree.sha}}
+async function pushBatch(tag,batch,base){
+ const R='/repos/'+S.repo;base=base||await getBase();
+ const tr=await ghj(`${R}/git/trees`,'POST',{base_tree:base.tree,tree:[{path:'up/.tag',mode:'100644',type:'blob',content:tag},...batch.map(b=>({path:'up/'+b.name,mode:'100644',type:'blob',sha:b.sha}))]}),
+ cm=await ghj(`${R}/git/commits`,'POST',{message:'up',tree:tr.sha,parents:[base.sha]}),
  name='up-'+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
  await ghj(`${R}/git/refs`,'POST',{ref:'refs/heads/'+name,sha:cm.sha});dbg('branche poussée :',name,'|',batch.length,'partie(s)');return name}
 async function sendBlob(bl,onp){const c=await toB64(bl);
  for(let t=1;;t++){try{return (await xput(API+`/repos/${S.repo}/git/blobs`,JSON.stringify({content:c,encoding:'base64'}),'application/json',onp)).sha}
-  catch(e){dbg('blob : tentative '+t+'/3 échouée :',e.message);if(t>=3)throw e;msg('Nouvelle tentative ('+t+'/3)…');await sleep(1500*t)}}}
+  catch(e){dbg('blob : tentative '+t+'/3 échouée :',e.message);if(t>=3)throw e;const lim=/\((403|429)\)/.test(e.message);msg(lim?'GitHub ralentit les envois, pause…':'Nouvelle tentative ('+t+'/3)…');await sleep(lim?15000*t:1500*t)}}}
 async function waitAssets(rel,names,sizes){
  const t0=Date.now(),need=new Set(names);
  for(;;){const got=new Map();
   for(let pg=1;;pg++){const r=await ghj(`/repos/${S.repo}/releases/${rel}/assets?per_page=100&page=${pg}`,'GET');r.forEach(a=>{if(need.has(a.name)&&a.state=='uploaded')got.set(a.name,a)});if(r.length<100)break}
-  msg(`Transfert vers la release (GitHub Actions) : ${got.size}/${names.length} parties prêtes…`);
   if(got.size==names.length)return names.map((n,i)=>{const a=got.get(n);if(a.size!=sizes[i])throw Error('Taille inattendue pour '+n+' ('+a.size+' au lieu de '+sizes[i]+')');return{id:a.id,size:a.size}});
+  msg(`Transfert vers la release (GitHub Actions) : ${got.size}/${names.length} parties prêtes…`);
   if(Date.now()-t0>20*60e3)throw Error("Le workflow « relay » n'a pas transféré les fichiers en 20 min : regarde l'onglet Actions du dépôt de données.");
-  await sleep(6000)}}
+  await sleep(4000)}}
 async function up(kind,files){
- let p=pr();
+ let p=pr();const T0=Date.now(),jobs=[];
  try{
   if(!await relayInstalled())throw Error("Workflow manquant : ajoute .github/workflows/relay.yml dans le dépôt de données (branche principale).");
   if(!p.rel){const r=await gh(`/repos/${S.repo}/releases`,{method:'POST',body:JSON.stringify({tag_name:'p-'+p.id,name:p.title})});if(!r.ok)throw Error('Création de la release impossible ('+r.status+')');const j=await r.json();await mut(d=>pr(d).rel=j.id);p=pr()}
-  const tag='p-'+p.id;
+  const tag='p-'+p.id,base=await getBase(),rel=p.rel;
   for(const f of files){
    const E=encOn(),nonce=E?crypto.getRandomValues(new Uint8Array(8)):null,pp=E?BPP*BS:PART,n=Math.max(1,Math.ceil(f.size/pp)),tot=f.size+(E?Math.ceil(f.size/BS)*16:0);
-   dbg('Fichier :',f.name,'|',f.type||'(type inconnu)','|',f.size,'octets | parties =',n,'| chiffré =',E);
-   const th=await thumb(f),base=Date.now()+'-'+f.name.replace(/[^\w.-]/g,'_'),names=[],sizes=[];let sent=0,batch=[];
-   for(let i=0;i<n;i++){
-    msg(E?`Chiffrement partie ${i+1}/${n}…`:`Préparation partie ${i+1}/${n}…`);
-    const sl=E?await encPart(f,i,nonce):(n>1?f.slice(i*PART,(i+1)*PART):f),name=n>1?`${base}.part${String(i+1).padStart(3,'0')}`:base;
-    const sha=await sendBlob(sl,l=>{const el=$('#prog'),v=Math.min(sent+l*.75,tot);if(el)el.innerHTML=`<div class="t">${E?'🔒 ':''}${esc(f.name)} — ${Math.round(v/tot*100)}%${n>1?` (partie ${i+1}/${n})`:''}</div><progress value="${v}" max="${tot}"></progress>`});
-    names.push(name);sizes.push(sl.size);batch.push({name,sha});sent+=sl.size;
-    if(batch.length==BATCH||i==n-1){await pushBatch(tag,batch);batch=[]}
-   }
-   const ps=await waitAssets(p.rel,names,sizes);
-   await mut(d=>pr(d).assets.push({id:ps[0].id,parts:(n>1||E)?ps:undefined,name:f.name,size:f.size,mime:f.type,enc:E?{n:b64u(nonce),bs:BS}:undefined,kind,by:S.me,at:Date.now(),th}),(kind=='final'?'Montage ajouté : ':'Rush ajouté : ')+f.name+(E?' 🔒':''));
-  }msg('Upload terminé')
+   dbg('Fichier :',f.name,'|',f.type||'(type inconnu)','|',f.size,'octets | parties =',n,'| chiffré =',E,'| envois en parallèle =',Math.min(CC(),n));
+   const thP=thumb(f),bn=Date.now()+'-'+f.name.replace(/[^\w.-]/g,'_'),t1=Date.now(),
+    names=Array.from({length:n},(_,i)=>n>1?`${bn}.part${String(i+1).padStart(3,'0')}`:bn),sizes=new Array(n),ld=new Array(n).fill(0),dn=new Array(n).fill(0);
+   let next=0,pend=[],fail=null;
+   const upd=()=>{const el=$('#prog');if(!el)return;const a=dn.reduce((x,y)=>x+y,0),b=ld.reduce((x,y)=>x+y,0),v=Math.min(a+b*.75,tot),mbps=(a*4/3+b)*8/1e6/Math.max(1,(Date.now()-t1)/1e3);
+    el.innerHTML=`<div class="t">${E?'🔒 ':''}${esc(f.name)} — ${Math.round(v/tot*100)}% · ${mbps.toFixed(0)} Mb/s${n>1?` · ${dn.filter(Boolean).length}/${n} parties`:''}</div><progress value="${v}" max="${tot}"></progress>`};
+   const worker=async()=>{for(;;){if(fail)return;const i=next++;if(i>=n)return;
+    try{const sl=E?await encPart(f,i,nonce):(n>1?f.slice(i*PART,(i+1)*PART):f);sizes[i]=sl.size;
+     const sha=await sendBlob(sl,l=>{ld[i]=l;upd()});ld[i]=0;dn[i]=sl.size;upd();pend.push({name:names[i],sha});
+     if(pend.length>=BATCH){const b=pend;pend=[];await pushBatch(tag,b,base)}}
+    catch(e){fail=e;throw e}}};
+   msg(E?'Chiffrement et envoi…':'Envoi vers GitHub…');
+   await Promise.all(Array.from({length:Math.min(CC(),n)},worker));
+   if(pend.length){await pushBatch(tag,pend,base);pend=[]}
+   const sec=(Date.now()-t1)/1e3;dbg('envoi terminé :',f.name,'en',sec.toFixed(0)+'s ≈',(tot*4/3*8/1e6/Math.max(1,sec)).toFixed(0),'Mb/s (base64 inclus)');
+   const w=waitAssets(rel,names,sizes);w.catch(()=>{});jobs.push({f,thP,E,nonce,n,w});
+  }
+  for(const j of jobs){const ps=await j.w,th=await j.thP;dbg('transfert terminé :',j.f.name,'| total',((Date.now()-T0)/1e3).toFixed(0)+'s');
+   await mut(d=>pr(d).assets.push({id:ps[0].id,parts:(j.n>1||j.E)?ps:undefined,name:j.f.name,size:j.f.size,mime:j.f.type,enc:j.E?{n:b64u(j.nonce),bs:BS}:undefined,kind,by:S.me,at:Date.now(),th}),(kind=='final'?'Montage ajouté : ':'Rush ajouté : ')+j.f.name+(j.E?' 🔒':''))}
+  msg('Upload terminé en '+Math.round((Date.now()-T0)/1e3)+' s')
  }catch(e){dbg('UPLOAD ÉCHEC :',e.message);msg(e.message)}
 }
 async function blob(id){const r=await gh(`/repos/${S.repo}/releases/assets/${id}`,{headers:{Accept:'application/octet-stream'}});if(!r.ok)throw Error('Téléchargement impossible');return r.blob()}
@@ -164,6 +173,9 @@ async function prep(a){const ps=parts(a);await idbSet('m:'+a.id,{size:a.size,mim
 const mmss=t=>Math.floor(t/60)+':'+String(t%60).padStart(2,'0');
 async function play(id){
  const a=pr().assets.find(x=>x.id==id);
+ if(a.url){const t=(a.mime||'video/mp4').split('/')[0],tg=t=='audio'?'audio':'video';S.cur=id;
+  $('#pl').innerHTML=t=='image'?`<img src="${esc(a.url)}" alt="" style="max-width:100%;border-radius:10px;margin-bottom:12px">`:`<${tg} controls autoplay playsinline src="${esc(a.url)}" style="width:100%" onerror="msg('Lecture directe impossible (dépôt privé ?) : utilise ⤓ pour ouvrir le fichier dans GitHub.')"></${tg}>`;
+  $('#pl').scrollIntoView({behavior:'smooth'});return}
  if(a.enc&&!S.key)return msg("Fichier chiffré : entre le mot de passe d'équipe dans Réglages");
  try{await prep(a);
   if(!await swOk())return msg('Lecture en direct indisponible dans ce navigateur : télécharge le fichier.');
@@ -174,6 +186,7 @@ async function play(id){
 async function seek(t,aid){if(S.cur!=aid)await play(aid);const v=document.querySelector('#pl video,#pl audio');if(v){const go=()=>{v.currentTime=t};v.readyState>0?go():v.addEventListener('loadedmetadata',go,{once:true})}}
 async function dl(id){
  const a=pr().assets.find(x=>x.id==id);
+ if(a.url){window.open(a.url,'_blank');return}
  if(a.enc&&!S.key)return msg("Fichier chiffré : entre le mot de passe d'équipe dans Réglages");
  const onp=n=>{const el=$('#prog');if(el)el.innerHTML=`<div class="t">Téléchargement ${esc(a.name)} — ${Math.round(n/a.size*100)}%</div><progress value="${n}" max="${a.size}"></progress>`};
  let w=null,h=null;
@@ -188,7 +201,7 @@ async function dl(id){
 }
 async function delA(id){if(!confirm('Supprimer ce fichier ?'))return;const a=pr().assets.find(x=>x.id==id);for(const q of parts(a))await gh(`/repos/${S.repo}/releases/assets/${q.id}`,{method:'DELETE'});mut(d=>{const p=pr(d);p.assets=p.assets.filter(x=>x.id!=id)},'Fichier supprimé : '+a.name)}
 const assetCards=(p,k)=>p.assets.filter(a=>a.kind==k).map(a=>`<div class="ac"><div class="th">${thumbH(a)}</div><div class="ai"><b title="${esc(a.name)}">${a.enc?'🔒 ':''}${esc(a.name)}</b><div class="t">${sz(a.size)}${a.parts?' · '+a.parts.length+' parties':''} · @${esc(a.by)}</div></div>
- <div class="row" style="gap:4px"><button class="g b" onclick="play('${a.id}')">Lire</button><button class="g b" onclick="dl('${a.id}')">⤓</button>${k=='final'&&isA()?`<button class="b" onclick="toYT('${a.id}')">YouTube</button>`:''}${isA()||a.by==S.me?`<button class="g b" onclick="delA('${a.id}')">✕</button>`:''}</div></div>`).join('')||'<div class="t">Rien pour l\'instant.</div>';
+ <div class="row" style="gap:4px"><button class="g b" onclick="play('${a.id}')">Lire</button><button class="g b" onclick="dl('${a.id}')">⤓</button>${k=='final'&&isA()&&!a.url?`<button class="b" onclick="toYT('${a.id}')">YouTube</button>`:''}${isA()||a.by==S.me?`<button class="g b" onclick="delA('${a.id}')">✕</button>`:''}</div></div>`).join('')||'<div class="t">Rien pour l\'instant.</div>';
 
 /* ---- YouTube ---- */
 async function ytTok(){
@@ -232,7 +245,7 @@ async function diag(mb){
  dbg('token :',S.tok?S.tok.slice(0,S.tok.startsWith('github_pat_')?11:4)+'… ('+S.tok.length+' car.)':'AUCUN','| repo :',S.repo);
  try{const r=await gh('/repos/'+S.repo),j=await r.json();dbg('1) dépôt :',r.status,{private:j.private,permissions:j.permissions,branche:j.default_branch,message:j.message})}catch(e){dbg('1) dépôt ÉCHEC :',e.message)}
  let wf=false;try{wf=await relayInstalled()}catch{}dbg('2) workflow .github/workflows/relay.yml présent :',wf);
- if(mb){try{const t0=Date.now(),sha=await sendBlob(new Blob([new Uint8Array(mb*1e6)]),()=>{});dbg('3) blob de '+mb+' Mo envoyé en',((Date.now()-t0)/1000).toFixed(1)+'s ('+(mb*8/((Date.now()-t0)/1000)).toFixed(1)+' Mb/s) sha='+sha.slice(0,7))}catch(e){dbg('3) blob '+mb+' Mo ÉCHEC :',e.message)}}
+ if(mb){try{const t0=Date.now(),sha=await sendBlob(new Blob([new Uint8Array(mb*1e6)]),()=>{});dbg('3) blob de '+mb+' Mo envoyé en',((Date.now()-t0)/1000).toFixed(1)+'s ('+(mb*8/((Date.now()-t0)/1000)).toFixed(1)+' Mb/s) sha='+sha.slice(0,7));const t1=Date.now();await Promise.all([1,2,3].map(()=>sendBlob(new Blob([new Uint8Array(mb*1e6)]),()=>{})));dbg('3b) 3 blobs de '+mb+' Mo EN PARALLÈLE :',((Date.now()-t1)/1000).toFixed(1)+'s ('+(3*mb*8/((Date.now()-t1)/1000)).toFixed(1)+' Mb/s au total)')}catch(e){dbg('3) blob '+mb+' Mo ÉCHEC :',e.message)}}
  if(wf){
   try{tag='debug-'+Date.now();const r=await gh(`/repos/${S.repo}/releases`,{method:'POST',body:JSON.stringify({tag_name:tag,name:'debug'})}),j=await r.json();dbg('4) release de test :',r.status,j.message||'OK');if(r.ok)rel=j.id}catch(e){dbg('4) release ÉCHEC :',e.message)}
   if(rel){try{const sha=await sendBlob(new Blob([new Uint8Array(1024)]),()=>{}),t0=Date.now();await pushBatch(tag,[{name:'debug.bin',sha}]);dbg('5) branche poussée, attente du workflow (jusqu\'à 4 min)…');
@@ -241,10 +254,22 @@ async function diag(mb){
    try{await gh(`/repos/${S.repo}/releases/${rel}`,{method:'DELETE'});await gh(`/repos/${S.repo}/git/refs/tags/${tag}`,{method:'DELETE'});dbg('   (release et tag de test supprimés)')}catch{}}
   else v='Impossible de créer une release : droits du token (Contents en écriture ?).';
  }else v="Le workflow relay.yml n'est pas installé dans le dépôt de données.";
- dbg('>>> VERDICT :',v);msg('Diagnostic terminé : voir 🐞');
+ dbg('>>> VERDICT :',v);msg('Diagnostic terminé : voir la console (F12)');
 }
-(function(){const b=document.createElement('button');b.textContent='🐞';b.title='Debug';b.style.cssText='position:fixed;right:12px;bottom:12px;z-index:99998;width:42px;height:42px;border-radius:50%;border:0;background:#222;color:#fff;font-size:18px;opacity:.75;cursor:pointer';
- b.onclick=()=>{let o=document.querySelector('#dbgo');if(o){o.remove();return}o=document.createElement('div');o.id='dbgo';o.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.88);padding:12px;display:flex;flex-direction:column;gap:8px';
-  o.innerHTML='<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="b" onclick="diag(0)">Diagnostic</button><button class="b" onclick="diag(30)">Diagnostic + test 30 Mo</button><button class="g b" onclick="dbgCopy()">Copier</button><button class="g b" onclick="document.querySelector(\'#dbgo\').remove()">Fermer</button></div><textarea id="dbgt" readonly style="flex:1;width:100%;font:12px monospace;background:#111;color:#ddd;border:0;padding:8px"></textarea>';
-  document.body.append(o);document.querySelector('#dbgt').value=DBG.join('\n')};document.body.append(b)})();
-dbg('core.js v4 (upload 100% GitHub) chargé');
+
+dbg('core.js v6 chargé');
+
+/* ---- Release directe : tu déposes les fichiers sur la page GitHub (vitesse maximale), le panel les importe ---- */
+async function ensureRel(){let p=pr();if(!p.rel){const r=await gh(`/repos/${S.repo}/releases`,{method:'POST',body:JSON.stringify({tag_name:'p-'+p.id,name:p.title})});if(!r.ok)throw Error('Création de la release impossible ('+r.status+')');const j=await r.json();await mut(d=>pr(d).rel=j.id);p=pr()}return p}
+async function openRel(){const w=window.open('','_blank');
+ try{const p=await ensureRel(),u=`https://github.com/${S.repo}/releases/edit/p-${p.id}`;if(w)w.location=u;else location.href=u;
+  msg('Glisse tes fichiers dans « Attach binaries », clique sur « Update release », puis reviens ici et clique sur Synchroniser.')}
+ catch(e){if(w)w.close();msg(e.message)}}
+async function syncRel(kind){
+ try{const p=await ensureRel(),known=new Set(p.assets.flatMap(a=>parts(a).map(x=>x.id)));let all=[];
+  for(let pg=1;;pg++){const r=await ghj(`/repos/${S.repo}/releases/${p.rel}/assets?per_page=100&page=${pg}`,'GET');all=all.concat(r);if(r.length<100)break}
+  const nw=all.filter(a=>a.state=='uploaded'&&!known.has(a.id)&&!/\.part\d{3}$/.test(a.name));
+  if(!nw.length)return msg("Rien de nouveau dans la release : dépose d'abord tes fichiers sur GitHub (bouton « Déposer sur GitHub »).");
+  await mut(d=>{const q=pr(d);nw.forEach(a=>q.assets.push({id:a.id,name:a.name,size:a.size,mime:a.content_type,url:a.browser_download_url,kind,by:(a.uploader&&a.uploader.login)||S.me,at:Date.now(),th:''}))},nw.length+' fichier(s) importé(s) : '+nw.map(a=>a.name).join(', '));
+  msg(nw.length+' fichier(s) importé(s)')}
+ catch(e){msg(e.message)}}
