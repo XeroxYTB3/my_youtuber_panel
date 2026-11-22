@@ -25,8 +25,8 @@ function projH(){
  <div class="c">${isA()?`<select onchange="setStatus(this.value)">${ST.map(s=>`<option ${s==p.status?'selected':''}>${s}</option>`).join('')}</select>`:strip(p)+`<div class="t" style="margin-top:6px">${p.status}</div>`}
  ${p.yt?`<p><a style="color:var(--acc)" href="https://youtu.be/${esc(p.yt)}">youtu.be/${esc(p.yt)}</a></p>`:''}</div>
  <div id="pl"></div><div id="prog"></div>
- <div class="c"><div class="row"><button class="b" onclick="openRel()">Déposer sur GitHub</button><button class="g b" onclick="syncRel('rush')">Synchroniser</button></div><label class="g b" style="width:100%;text-align:center;margin-top:8px">Upload via le panel (lent)<input type="file" multiple accept="video/*,audio/*,image/*" onchange="up('rush',this.files)"></label>${assetCards(p,'rush')}</div>
- <div class="c"><div class="row"><button class="b" onclick="openRel()">Déposer sur GitHub</button><button class="g b" onclick="syncRel('final')">Synchroniser</button></div><label class="g b" style="width:100%;text-align:center;margin-top:8px">Upload via le panel (lent)<input type="file" accept="video/*" onchange="up('final',this.files)"></label>${assetCards(p,'final')}</div>
+ <div class="c"><label class="b" style="width:100%;text-align:center">Uploader des rushs<input type="file" multiple accept="video/*,audio/*,image/*" onchange="up('rush',this.files)"></label>${assetCards(p,'rush')}</div>
+ <div class="c"><label class="b" style="width:100%;text-align:center">Uploader le montage<input type="file" accept="video/*" onchange="up('final',this.files)"></label>${assetCards(p,'final')}</div>
  ${p.desc||p.tags?`<div class="c"><h3 style="margin-top:0">YouTube</h3><div>${esc(p.desc)}</div><div class="t">${esc(p.tags)}</div></div>`:''}
  <div class="c"><h3 style="margin-top:0">Commentaires</h3>${comH(p)}</div>
  <div class="c"><h3 style="margin-top:0">Historique</h3>${logH(S.d.log.filter(l=>l.p==p.id).slice(0,15))}</div>`}
