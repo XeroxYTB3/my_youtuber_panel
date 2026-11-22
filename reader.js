@@ -5,21 +5,32 @@ const idbSet=async(k,v)=>{const d=await idbOpen();return new Promise((res,rej)=>
 const b64d=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
 
 /* Les URL signées renvoyées par GitHub sont réutilisées : pas d'appel API à chaque morceau */
-const urlCache=new Map();
-async function getRange(cfg,p,lo,hi,sig){
- const h={Range:`bytes=${lo}-${hi}`};let last='';
- for(let t=0;t<3;t++){
-  let r;const c=urlCache.get(p.id);
-  if(c&&Date.now()-c.t<240000){try{r=await fetch(c.u,{headers:h,signal:sig})}catch(e){if(sig&&sig.aborted)throw e;last='lien signé : '+e.message}}
-  if(!r||r.status!=206){
-   try{r=await fetch(`https://api.github.com/repos/${cfg.repo}/releases/assets/${p.id}`,{headers:{Authorization:'Bearer '+cfg.tok,Accept:'application/octet-stream',...h},signal:sig})}
-   catch(e){if(sig&&sig.aborted)throw e;last='API GitHub : '+e.message+' (blocage CORS probable)';continue}
-   if(r.status==206)urlCache.set(p.id,{u:r.url,t:Date.now()});
-  }
-  if(r.status==206)return new Uint8Array(await r.arrayBuffer());
-  last='statut HTTP '+r.status;urlCache.delete(p.id);
+const urlCache=new Map(),partCache=new Map(),KINDS=['auth+range','anon+range','auth+full','anon+full'];let okKind=null;
+/* 4 façons de lire un morceau ; la première qui marche est mémorisée */
+async function viaKind(kind,cfg,p,lo,hi,sig){
+ const range=kind.endsWith('range'),h={Accept:'application/octet-stream'};
+ if(kind.startsWith('auth'))h.Authorization='Bearer '+cfg.tok;
+ const api=`https://api.github.com/repos/${cfg.repo}/releases/assets/${p.id}`;
+ if(range){
+  const c=urlCache.get(p.id);
+  if(c&&Date.now()-c.t<240000){try{const r=await fetch(c.u,{headers:{Range:`bytes=${lo}-${hi}`},signal:sig});if(r.status==206)return new Uint8Array(await r.arrayBuffer())}catch(e){if(sig&&sig.aborted)throw e}urlCache.delete(p.id)}
+  const r=await fetch(api,{headers:{...h,Range:`bytes=${lo}-${hi}`},signal:sig});
+  if(r.status!=206)throw Error('statut HTTP '+r.status);
+  urlCache.set(p.id,{u:r.url,t:Date.now()});return new Uint8Array(await r.arrayBuffer());
  }
- throw Error('Lecture impossible ('+last+')');
+ if(p.size>64*1048576)throw Error('partie trop grosse pour ce mode');
+ let c=partCache.get(p.id);
+ if(!c){const r=await fetch(api,{headers:h,signal:sig});if(!r.ok)throw Error('statut HTTP '+r.status);c=new Uint8Array(await r.arrayBuffer());
+  partCache.set(p.id,c);if(partCache.size>4)partCache.delete(partCache.keys().next().value)}
+ return c.subarray(lo,hi+1);
+}
+async function getRange(cfg,p,lo,hi,sig){
+ const order=okKind?[okKind,...KINDS.filter(k=>k!=okKind)]:KINDS,errs=[];
+ for(const k of order){
+  try{const b=await viaKind(k,cfg,p,lo,hi,sig);okKind=k;return b}
+  catch(e){if(sig&&sig.aborted)throw e;errs.push(k+' : '+e.message)}
+ }
+ throw Error('Lecture impossible ('+errs.join(' | ')+')');
 }
 
 /* Octets bruts [s,e] du fichier logique = parties mises bout à bout (lues en parallèle si on franchit une frontière) */
