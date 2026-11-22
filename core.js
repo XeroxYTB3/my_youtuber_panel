@@ -133,7 +133,7 @@ async function play(id){
  if(a.enc&&!S.key)return msg("Fichier chiffré : entre le mot de passe d'équipe dans Réglages");
  try{await prep(a);
   if(!await swOk())return msg('Lecture en direct indisponible dans ce navigateur : télécharge le fichier.');
-  const t=(a.mime||'video/mp4').split('/')[0],u='_s/'+a.id,tag=t=='audio'?'audio':'video';S.cur=id;
+  const t=(a.mime||'video/mp4').split('/')[0],u='_s/'+a.id,tag=t=='audio'?'audio':'video';S.cur=id;S.fb=null;
   $('#pl').innerHTML=t=='image'?`<img src="${u}" alt="" style="max-width:100%;border-radius:10px;margin-bottom:12px">`:`<${tag} controls autoplay playsinline onerror="vErr('${a.id}')" src="${u}" style="width:100%"></${tag}>`;
   $('#pl').scrollIntoView({behavior:'smooth'})
  }catch(e){msg(e.message)}}
@@ -193,8 +193,10 @@ async function noRange(a){const cfg=await prep(a),raws=[];
  const raw=new Uint8Array(raws.reduce((x,y)=>x+y.length,0));let o=0;for(const x of raws){raw.set(x,o);o+=x.length}
  return new Blob([await decBlocks(cfg,a,raw,0)],{type})}
 async function vErr(id){
- const a=pr().assets.find(x=>x.id==id);if(!a||S.fb==id)return;S.fb=id;
- if(a.size>1.6e9)return msg('La lecture en direct a échoué. Réglages → Diagnostic lecture, puis envoie-moi le résultat.');
+ const a=pr().assets.find(x=>x.id==id);if(!a||S.fb==id)return;S.fb=id;let st=0;
+ try{st=(await fetch('_s/'+id,{headers:{Range:'bytes=0-1'}})).status}catch{}
+ if(st==206)return msg("Le flux est bien reçu mais ce navigateur ne décode pas cette vidéo (souvent H.265/HEVC ou ProRes). Réexporte-la en H.264 ou télécharge-la.");
+ if(a.size>1.6e9)return msg('Lecture en direct impossible (code '+st+'). Réglages → Diagnostic lecture, puis envoie-moi le résultat.');
  try{msg('Lecture en direct impossible : mode secours (chargement complet)…');const b=await noRange(a);
   $('#pl').innerHTML=`<video controls autoplay playsinline src="${URL.createObjectURL(b)}" style="width:100%"></video>`;msg('Mode secours actif')}catch(e){msg(e.message)}}
 async function diag(){
@@ -209,4 +211,6 @@ async function diag(){
  catch(e){L('Lecture par plages','BLOQUÉE par le navigateur : '+e.message)}
  try{const g=await navigator.serviceWorker.getRegistration();L('Service worker enregistré',g?'oui ('+g.scope+')':'non');L('Service worker actif ici',navigator.serviceWorker.controller?'oui':'non (recharge la page)')}catch(e){L('Service worker',e.message)}
  if(a.enc)L('Clé de chiffrement',S.key?'chargée':'MANQUANTE');
+ try{await prep(a);L('Service worker sert le fichier',(await fetch('_s/'+a.id,{headers:{Range:'bytes=0-1'}})).status+' (attendu 206)')}catch(e){L('Service worker sert le fichier','ERREUR '+e.message)}
+ const v=document.createElement('video');L('Navigateur lit H.264',v.canPlayType('video/mp4; codecs="avc1.640028"')||'non');L('Navigateur lit H.265/HEVC',v.canPlayType('video/mp4; codecs="hvc1.1.6.L120.B0"')||'non');
  L('Fin',"copie ce texte et envoie-le moi")}
