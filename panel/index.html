@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Panel</title>
+<script>
+/* Détection mobile via le User-Agent (GitHub Pages n'a pas de serveur : c'est le navigateur qui lit cet en-tête) */
+if(/Android|iPhone|iPod|Mobile|Windows Phone/i.test(navigator.userAgent)&&!/desktop/.test(location.search))location.replace('m.html');
+</script>
+<link rel="stylesheet" href="style.css"></head><body>
+<div id="app"></div><div id="msg"></div>
+<script src="reader.js"></script>
+<script src="core.js"></script>
+<script>
+const N=new Date();S.cal={y:N.getFullYear(),m:N.getMonth(),sel:ymd(N)};
+setInterval(()=>{const e=$('#tc');if(e)e.textContent=new Date().toTimeString().slice(0,8)},1000);
+
+function render(){
+ const a=$('#app');if(!S.d)return a.innerHTML=loginH();
+ const T=[['p','Projets'],['c','Calendrier'],['h','Historique'],['t','Équipe'],['s','Réglages']];
+ a.innerHTML=`<div class="shell"><nav><div class="rec"><i></i>PANEL</div><div id="tc">${new Date().toTimeString().slice(0,8)}</div>
+ ${T.map(([k,l])=>`<button class="${S.tab==k?'on':''}" onclick="S.tab='${k}';S.pid=null;render()">${IC(k)}<span>${l}</span></button>`).join('')}
+ <div class="me"><span class="av">${esc(S.me[0])}</span><div><b>@${esc(S.me)}</b><small>${isA()?'Admin':'Monteur'}</small></div></div></nav><main>${dueH()}${{p:S.pid?projH:listH,c:calH,h:histH,t:teamH,s:setH}[S.tab]()}</main></div>`;
+}
+const statsH=()=>{const ps=S.d.projects,fl=ps.reduce((n,p)=>n+p.assets.length,0),by=ps.reduce((n,p)=>n+p.assets.reduce((m,a)=>m+a.size,0),0),wk=S.d.events.filter(e=>!e.done&&new Date(e.date)<Date.now()+7*864e5).length;
+ return`<div class="stats"><div class="st"><b>${ps.filter(p=>p.status!='Publié').length}</b><span>projets en cours</span></div><div class="st"><b>${wk}</b><span>échéances sous 7 jours</span></div><div class="st"><b>${sz(by)}</b><span>${fl} fichier${fl>1?'s':''} stocké${fl>1?'s':''}</span></div></div>`};
+function listH(){
+ const ps=S.d.projects.filter(p=>isA()||(p.editors||[]).includes(S.me));
+ return`<div class="row"><div><h1>Projets</h1><div class="t">Vos vidéos, du rush à la publication.</div></div>${isA()?`<button class="b r sp" onclick="newP()">+ Nouveau projet</button>`:''}</div>${statsH()}
+ <div class="grid">${ps.map(p=>{const c=p.assets.find(a=>a.th),n=p.assets.filter(a=>a.kind=='rush').length;return`<div class="pc" onclick="S.pid='${p.id}';render()"><div class="cov">${c?`<img src="${c.th}" alt="">`:'<div class="ph">AUCUN RUSH</div>'}<span class="bdg ${p.status=='Publié'?'ok':''}">${p.status}</span><span class="cnt">${n} rush${n>1?'s':''}</span></div><div class="bd"><b>${esc(p.title)}</b>${strip(p)}
+ <div class="t">${(p.editors||[]).length?p.editors.map(e=>'@'+esc(e)).join(' '):'Aucun monteur assigné'}</div></div></div>`}).join('')}</div>
+ ${ps.length?'':'<div class="empty">Aucun projet pour l\'instant.<br>Crée le premier pour y déposer tes rushs.</div>'}`}
+const newP=()=>{const t=prompt('Titre de la vidéo ?');if(t)mut(d=>d.projects.unshift({id:uid(),title:t,desc:'',tags:'',status:'Idée',editors:[],assets:[],com:[]}),'Projet créé : '+t,'')};
+function projH(){
+ const p=pr();if(!p){S.pid=null;return listH()}
+ const ev=S.d.events.filter(e=>e.project==p.id).sort((a,b)=>a.date<b.date?-1:1),A=isA();
+ return`<button class="g b" onclick="S.pid=null;render()">← Projets</button>
+ <div class="row" style="margin:14px 0"><h1 style="margin:0">${esc(p.title)}</h1>${A?`<button class="g b sp" onclick="delP()">Supprimer</button>`:''}</div>
+ <div class="c">${strip(p,A)}${p.yt?`<p>Sur YouTube : <a style="color:var(--acc)" target="_blank" href="https://youtu.be/${esc(p.yt)}">youtu.be/${esc(p.yt)}</a></p>`:''}
+ ${A?`<p class="row">Monteurs : ${Object.keys(S.d.users).filter(u=>S.d.users[u]=='editor').map(u=>`<label><input type="checkbox" ${(p.editors||[]).includes(u)?'checked':''} onchange="togE('${u}')"> @${esc(u)}</label>`).join('')||'<span class="t">ajoute des monteurs dans Équipe</span>'}</p>`:''}</div>
+ <div id="pl"></div><div id="prog"></div>
+ <div class="c"><div class="row"><h3 style="margin:0">Rushs</h3><label class="b sp">Uploader des rushs<input type="file" multiple accept="video/*,audio/*,image/*" onchange="up('rush',this.files)"></label></div>${assetCards(p,'rush')}</div>
+ <div class="c"><div class="row"><h3 style="margin:0">Vidéo montée</h3><label class="b sp">Uploader le montage<input type="file" accept="video/*" onchange="up('final',this.files)"></label></div>${assetCards(p,'final')}</div>
+ <div class="c"><h3 style="margin-top:0">Infos YouTube</h3>${A?`<textarea rows="4" placeholder="Description" onchange="setP('desc',this.value,'Description modifiée')">${esc(p.desc)}</textarea>
+ <input style="width:100%;margin-top:8px" placeholder="Tags séparés par des virgules" value="${esc(p.tags)}" onchange="setP('tags',this.value,'Tags modifiés')">`:`<div>${esc(p.desc)||'<span class="t">Pas de description.</span>'}</div><div class="t">${esc(p.tags)}</div>`}</div>
+ <div class="c"><h3 style="margin-top:0">Échéances</h3>${ev.map(evH).join('')||'<div class="t">Aucune. Ajoute-en dans Calendrier.</div>'}</div>
+ <div class="c"><h3 style="margin-top:0">Commentaires</h3>${comH(p)}</div>
+ <div class="c"><h3 style="margin-top:0">Historique du projet</h3>${logH(S.d.log.filter(l=>l.p==p.id))}</div>`}
+function togE(u){mut(d=>{const p=pr(d);p.editors=p.editors||[];const i=p.editors.indexOf(u);i<0?p.editors.push(u):p.editors.splice(i,1)},'Monteur @'+u+' modifié')}
+function delP(){const t=pr().title;if(confirm('Supprimer ce projet ? Les fichiers restent dans la Release GitHub.'))mut(d=>{d.projects=d.projects.filter(x=>x.id!=S.pid);d.events=d.events.filter(e=>e.project!=S.pid);S.pid=null},'Projet supprimé : '+t,'')}
+
+const myEv=()=>S.d.events.filter(e=>isA()||e.assignee==S.me);
+function calH(){
+ const{y,m,sel}=S.cal,off=(new Date(y,m,1).getDay()+6)%7,n=new Date(y,m+1,0).getDate(),ev=myEv(),today=ymd(new Date());
+ let c=['L','M','M','J','V','S','D'].map(d=>`<div class="h">${d}</div>`).join('')+'<div class="dc o"></div>'.repeat(off);
+ for(let d=1;d<=n;d++){const k=ymd(new Date(y,m,d)),es=ev.filter(e=>ymd(new Date(e.date))==k);
+  c+=`<div class="dc ${k==sel?'sel':''} ${k==today?'today':''}" onclick="S.cal.sel='${k}';render()"><span>${d}</span>${es.slice(0,2).map(e=>`<small style="border-color:${TC[e.type]};${e.done?'opacity:.4':''}">${esc(e.title)}</small>`).join('')}${es.length>2?`<small style="border-color:transparent">+${es.length-2}</small>`:''}</div>`}
+ const day=ev.filter(e=>ymd(new Date(e.date))==sel).sort((a,b)=>a.date<b.date?-1:1);
+ return`<h1>Calendrier</h1><div class="c"><div class="row" style="margin-bottom:10px"><button class="g b" onclick="mv(-1)">‹</button><b style="min-width:150px;text-align:center;text-transform:capitalize">${new Date(y,m,1).toLocaleDateString('fr-FR',{month:'long',year:'numeric'})}</b><button class="g b" onclick="mv(1)">›</button>
+ <span class="t sp"><i class="dot" style="background:var(--rec);display:inline-block"></i> Tournage <i class="dot" style="background:var(--blue);display:inline-block"></i> Montage <i class="dot" style="background:var(--grn);display:inline-block"></i> Publication</span></div><div class="cal">${c}</div></div>
+ <div class="c"><h3 style="margin-top:0">${new Date(sel+'T12:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})}</h3>${day.map(evH).join('')||'<div class="t">Rien ce jour-là.</div>'}
+ ${isA()?`<div class="row" style="margin-top:12px"><input id="et" placeholder="Ex : monter la vidéo #12"><select id="ety"><option value="shoot">Tournage</option><option value="edit">Montage</option><option value="publish">Publication</option></select>
+ <input id="ed" type="datetime-local" value="${sel}T10:00"><select id="ea"><option value="">Assigné à…</option>${Object.keys(S.d.users).map(u=>`<option>${esc(u)}</option>`).join('')}</select>
+ <select id="ep"><option value="">Projet…</option>${S.d.projects.map(p=>`<option value="${p.id}">${esc(p.title)}</option>`).join('')}</select><button class="b" onclick="addE()">Ajouter</button></div>`:''}</div>`}
+function mv(k){let{y,m}=S.cal;m+=k;if(m<0){m=11;y--}if(m>11){m=0;y++}S.cal.y=y;S.cal.m=m;render()}
+function addE(){const t=$('#et').value.trim(),dt=$('#ed').value;if(!t||!dt)return msg('Titre et date obligatoires');
+ const e={id:uid(),title:t,type:$('#ety').value,date:new Date(dt).toISOString(),assignee:$('#ea').value,project:$('#ep').value,done:false};mut(d=>d.events.push(e),'Échéance ajoutée : '+t,e.project)}
+
+const histH=()=>`<h1>Historique</h1><div class="c">${logH(S.d.log)}</div>`;
+const teamH=()=>`<h1>Équipe</h1><div class="c">${Object.entries(S.d.users).map(([u,r])=>`<div class="it row"><b>@${esc(u)}</b><span class="tag">${r=='admin'?'Admin':'Monteur'}</span>${isA()&&u!=S.me?`<button class="g b sp" onclick="rmU('${u}')">Retirer</button>`:''}</div>`).join('')}
+ ${isA()?`<div class="row" style="margin-top:12px"><input id="nu" placeholder="Pseudo GitHub du monteur"><button class="b" onclick="addU()">Ajouter</button></div><p class="t">Invite aussi cette personne comme collaborateur (Write) sur le dépôt de données.</p>`:''}</div>`;
+const addU=()=>{const u=$('#nu').value.trim().replace('@','');if(u)mut(d=>d.users[u]='editor','Monteur ajouté : @'+u,'')};
+const rmU=u=>mut(d=>{delete d.users[u];d.projects.forEach(p=>p.editors=(p.editors||[]).filter(x=>x!=u))},'Monteur retiré : @'+u,'');
+const setH=()=>`<h1>Réglages</h1><div class="c"><h3 style="margin-top:0">Notifications</h3><p class="t">Sur cet appareil, tant que l'onglet est ouvert. Les e-mails passent par le workflow GitHub.</p><button class="b" onclick="Notification.requestPermission().then(()=>msg('Notifications : '+Notification.permission))">Activer</button></div>
+ ${keyH()}
+ ${isA()?`<div class="c"><h3 style="margin-top:0">YouTube</h3><p class="t">Client ID OAuth Google (origine autorisée = l'URL de ton site Pages).</p><div class="row"><input id="yi" style="flex:1" value="${esc(S.yt)}" placeholder="xxxx.apps.googleusercontent.com"><button class="b" onclick="S.yt=$('#yi').value.trim();localStorage.yt=S.yt;msg('Enregistré')">Enregistrer</button></div></div>`:''}
+ <div class="c row"><a href="m.html">Version mobile</a><button class="g b sp" onclick="logout()">Se déconnecter</button></div>`;
+render();if(S.tok&&S.repo)login();
+</script></body></html>

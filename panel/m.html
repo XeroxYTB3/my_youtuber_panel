@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1217">
+<title>Panel</title>
+<link rel="stylesheet" href="style.css"></head><body class="m">
+<div id="app"></div><div id="msg"></div>
+<script src="reader.js"></script>
+<script src="core.js"></script>
+<script>
+function render(){
+ const a=$('#app');if(!S.d)return a.innerHTML=loginH();
+ const T=[['p','Projets','p'],['a','Agenda','c'],['s','Moi','m']];
+ a.innerHTML=`<header class="mh"><div class="rec"><i></i>PANEL</div><span class="t">@${esc(S.me)}</span></header><main>${dueH()}${{p:S.pid?projH:listH,a:agendaH,s:meH}[S.tab]()}</main>
+ <div class="tabs">${T.map(([k,l,i])=>`<button class="${S.tab==k?'on':''}" onclick="S.tab='${k}';S.pid=null;render()">${IC(i)}<span>${l}</span></button>`).join('')}</div>`;
+}
+function listH(){
+ const ps=S.d.projects.filter(p=>isA()||(p.editors||[]).includes(S.me));
+ return`<h1>Projets</h1>${isA()?`<button class="b r" style="width:100%;margin-bottom:12px" onclick="newP()">+ Nouveau projet</button>`:''}
+ ${ps.map(p=>{const c=p.assets.find(a=>a.th);return`<div class="pc" onclick="S.pid='${p.id}';render()"><div class="th">${c?`<img src="${c.th}" alt="">`:'<div class="ph">VIDE</div>'}</div><div style="display:grid;gap:6px"><b>${esc(p.title)}</b>${strip(p)}<span class="t">${p.status} · ${p.assets.length} fichier${p.assets.length>1?'s':''}</span></div></div>`}).join('')||'<div class="t">Aucun projet.</div>'}`}
+const newP=()=>{const t=prompt('Titre de la vidéo ?');if(t)mut(d=>d.projects.unshift({id:uid(),title:t,desc:'',tags:'',status:'Idée',editors:[],assets:[],com:[]}),'Projet créé : '+t,'')};
+function projH(){
+ const p=pr();if(!p){S.pid=null;return listH()}
+ return`<button class="g b" onclick="S.pid=null;render()">← Projets</button><h1 style="margin-top:14px">${esc(p.title)}</h1>
+ <div class="c">${isA()?`<select onchange="setStatus(this.value)">${ST.map(s=>`<option ${s==p.status?'selected':''}>${s}</option>`).join('')}</select>`:strip(p)+`<div class="t" style="margin-top:6px">${p.status}</div>`}
+ ${p.yt?`<p><a style="color:var(--acc)" href="https://youtu.be/${esc(p.yt)}">youtu.be/${esc(p.yt)}</a></p>`:''}</div>
+ <div id="pl"></div><div id="prog"></div>
+ <div class="c"><label class="b" style="width:100%;text-align:center">Uploader des rushs<input type="file" multiple accept="video/*,audio/*,image/*" onchange="up('rush',this.files)"></label>${assetCards(p,'rush')}</div>
+ <div class="c"><label class="b" style="width:100%;text-align:center">Uploader le montage<input type="file" accept="video/*" onchange="up('final',this.files)"></label>${assetCards(p,'final')}</div>
+ ${p.desc||p.tags?`<div class="c"><h3 style="margin-top:0">YouTube</h3><div>${esc(p.desc)}</div><div class="t">${esc(p.tags)}</div></div>`:''}
+ <div class="c"><h3 style="margin-top:0">Commentaires</h3>${comH(p)}</div>
+ <div class="c"><h3 style="margin-top:0">Historique</h3>${logH(S.d.log.filter(l=>l.p==p.id).slice(0,15))}</div>`}
+function agendaH(){
+ const ev=S.d.events.filter(e=>isA()||e.assignee==S.me).sort((a,b)=>a.done-b.done||(a.date<b.date?-1:1));
+ return`<h1>Agenda</h1><div class="c">${ev.map(evH).join('')||'<div class="t">Rien de prévu.</div>'}</div>`}
+const meH=()=>`<h1>Moi</h1><div class="c"><b>@${esc(S.me)}</b> <span class="tag">${isA()?'Admin':'Monteur'}</span></div>
+ <div class="c"><button class="b" style="width:100%" onclick="Notification.requestPermission().then(()=>msg('Notifications : '+Notification.permission))">Activer les notifications</button>
+ <p class="t">Sur mobile, les rappels fiables arrivent par GitHub (e-mail ou app GitHub) grâce au workflow.</p></div>
+ ${keyH()}
+ <div class="c"><h3 style="margin-top:0">Activité récente</h3>${logH(S.d.log.slice(0,15))}</div>
+ <div class="c row"><a class="t" href="index.html?desktop">Version complète</a><button class="g b sp" onclick="logout()">Se déconnecter</button></div>`;
+if(S.tok&&S.repo)login();else render();
+</script></body></html>
