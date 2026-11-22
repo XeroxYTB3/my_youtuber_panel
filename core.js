@@ -96,28 +96,30 @@ const keyH=()=>`<div class="c"><h3 style="margin-top:0">Chiffrement</h3><p class
  <div class="row"><input id="kp" type="password" style="flex:1" placeholder="Mot de passe d'équipe"><button class="b" onclick="kSet()">${S.d.k?'Déverrouiller':'Activer'}</button></div>
  ${S.key?`<label class="row" style="margin-top:10px"><input type="checkbox" style="width:auto" ${localStorage.enc=='1'?'checked':''} onchange="localStorage.enc=this.checked?'1':'0'"> Chiffrer les nouveaux uploads</label><div class="t">État : déverrouillé sur cet appareil</div>`:''}</div><div class="c"><h3 style="margin-top:0">Diagnostic lecture</h3><p class="t">Si la vidéo ne démarre pas, lance ce test et copie le résultat.</p><div class="row"><button class="g b" onclick="diag()">Lancer le test</button><button class="b" onclick="testStore()">Tester le stockage GitHub</button></div><pre id="dg" style="white-space:pre-wrap;font-size:.8rem;margin:10px 0 0"></pre></div>`;
 
-async function encPart(f,i,nonce){const bl=[],s=i*BPP*BS,e=Math.min(s+BPP*BS,f.size);
- for(let o=s,b=i*BPP;o<e;o+=BS,b++){const iv=new Uint8Array(12);iv.set(nonce);new DataView(iv.buffer).setUint32(8,b);
-  bl.push(await crypto.subtle.encrypt({name:'AES-GCM',iv},S.key,await f.slice(o,Math.min(o+BS,e)).arrayBuffer()))}
+async function encPart(f,i,nonce){
+ const s0=i*BPP*BS,e=Math.min(s0+BPP*BS,f.size),offs=[];for(let o=s0;o<e;o+=BS)offs.push(o);
+ const bl=await Promise.all(offs.map(async(o,j)=>{const iv=new Uint8Array(12);iv.set(nonce);new DataView(iv.buffer).setUint32(8,i*BPP+j);
+  return crypto.subtle.encrypt({name:'AES-GCM',iv},S.key,await f.slice(o,Math.min(o+BS,e)).arrayBuffer())}));
  return new Blob(bl)}
 /* ---- stockage : dépôts GitHub publics (écriture via l'API Git, lecture via raw.githubusercontent.com) ---- */
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const toB64=b=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.slice(r.result.indexOf(',')+1));r.onerror=()=>rej(Error('Lecture du fichier impossible'));r.readAsDataURL(b)});
+async function waitS(sec,why){for(let i=Math.ceil(sec);i>0;i--){const el=$('#prog');if(el)el.innerHTML=`<div class="t">⏳ ${why} — reprise automatique dans ${i} s (ne ferme pas et ne recharge pas la page)</div>`;await sleep(1000)}}
 async function ghj(path,body,method='POST'){
- for(let t=0;t<6;t++){
+ for(let t=0;t<12;t++){
   const r=await gh(path,{method,body:JSON.stringify(body)});
   if(r.ok)return r.status==204?{}:r.json();
-  if(r.status==403||r.status==429||r.status>=500){const w=+r.headers.get('retry-after')||15*(t+1);msg('GitHub demande de patienter ('+w+' s)…');await sleep(w*1000);continue}
+  if(r.status==403||r.status==429||r.status>=500){const ra=+r.headers.get('retry-after');await waitS((ra?ra+3:Math.min(300,30*(t+1)))+Math.random()*8,'GitHub limite le rythme');continue}
   throw Error(path.split('/').slice(-1)[0]+' : HTTP '+r.status+' '+((await r.json().catch(()=>({}))).message||''));
  }
- throw Error('GitHub refuse trop de requêtes : réessaie plus tard');
+ throw Error('GitHub refuse trop de requêtes : réessaie dans une heure');
 }
 function blobPost(r,b64,onp){return new Promise((res,rej)=>{const x=new XMLHttpRequest();x.open('POST',`${API}/repos/${S.me}/${r}/git/blobs`);
  x.setRequestHeader('Authorization','Bearer '+S.tok);x.setRequestHeader('Accept','application/vnd.github+json');x.setRequestHeader('Content-Type','application/json');
  x.upload.onprogress=e=>onp(e.loaded/e.total);x.onload=()=>x.status<300?res(JSON.parse(x.responseText).sha):rej(Object.assign(Error('HTTP '+x.status),{st:x.status}));
- x.onerror=()=>rej(Error('Erreur réseau'));x.send(JSON.stringify({content:b64,encoding:'base64'}))})}
+ x.onerror=()=>rej(Error('Erreur réseau'));x.send(new Blob(['{"encoding":"base64","content":"',b64,'"}']))})}
 async function blobSafe(r,blob,onp){const b64=await toB64(blob);
- for(let t=0;t<6;t++){try{return await blobPost(r,b64,onp)}catch(e){if(t==5||(e.st&&e.st<500&&e.st!=403&&e.st!=429))throw e;const w=20*(t+1);msg('Nouvelle tentative dans '+w+' s…');await sleep(w*1000)}}}
+ for(let t=0;t<12;t++){try{return await blobPost(r,b64,onp)}catch(e){if(t==11||(e.st&&e.st<500&&e.st!=403&&e.st!=429))throw e;await waitS(Math.min(300,30*(t+1))+Math.random()*10,'GitHub limite le rythme')}}}
 async function mkRepo(name){
  const x=await ghj('/user/repos',{name,description:'Stockage Panel',private:false,auto_init:true}),br=x.default_branch||'main';
  for(let t=0;t<10;t++){const r=await gh(`/repos/${S.me}/${name}/git/ref/heads/${br}`);
@@ -130,27 +132,27 @@ async function commitBatch(st,items){
  await ghj(`/repos/${S.me}/${st.name}/git/refs/heads/${st.br}`,{sha:c.sha},'PATCH');
  st.head=c.sha;st.tree=t.sha;return c.sha;
 }
-const CAP=2.5*1024**3,BATCH=4;
+const CAP=2.5*1024**3,CONC=6;
 async function up(kind,files){
  if(!encOn()&&!S.okPub){if(!confirm("Sans chiffrement, tes fichiers seront PUBLICS sur GitHub (dépôts publics). Continuer ? Active le chiffrement dans Réglages pour les protéger."))return;S.okPub=1}
  try{
   for(const f of files){
-   const E=encOn(),nonce=E?crypto.getRandomValues(new Uint8Array(8)):null,pp=E?BPP*BS:PART,n=Math.max(1,Math.ceil(f.size/pp)),tot=f.size+(E?Math.ceil(f.size/BS)*16:0),per=Math.max(1,Math.floor(CAP/(pp+(E?BPP*16:0))));
-   const thP=thumb(f),aid=uid()+uid(),res=new Array(n),loaded=new Array(n).fill(0),t0=Date.now();let st=null,inRepo=0,k=0;
+   const t0=Date.now(),E=encOn(),nonce=E?crypto.getRandomValues(new Uint8Array(8)):null,pp=E?BPP*BS:PART,n=Math.max(1,Math.ceil(f.size/pp)),
+    tot=f.size+(E?Math.ceil(f.size/BS)*16:0),per=Math.max(1,Math.floor(CAP/(pp+(E?BPP*16:0)))),nR=Math.ceil(n/per),aid=uid()+uid();
+   const thP=thumb(f),repoP=Array.from({length:nR},(_,k)=>{const p=mkRepo(`pnl-${aid}-${k+1}`);p.catch(()=>{});return p});
+   const items=Array.from({length:nR},()=>[]),res=new Array(n),loaded=new Array(n).fill(0);let next=0,tEnd=0;
    const show=()=>{const s2=loaded.reduce((x,y)=>x+y,0),sp=s2/((Date.now()-t0)/1000||1),left=sp>0?Math.round((tot-s2)/sp):0,el=$('#prog');
-    if(el)el.innerHTML=`<div class="t">${E?'🔒 ':''}${esc(f.name)} — ${Math.round(s2/tot*100)}% · ${(sp/1e6).toFixed(1)} Mo/s · reste ${left>3600?Math.floor(left/3600)+' h ':''}${Math.floor(left%3600/60)} min</div><progress value="${s2}" max="${tot}"></progress>`};
-   for(let i0=0;i0<n;i0+=BATCH){
-    const i1=Math.min(n,i0+BATCH);
-    if(!st||inRepo+(i1-i0)>per){st=await mkRepo(`pnl-${aid}-${++k}`);inRepo=0}
-    const items=await Promise.all(Array.from({length:i1-i0},async(_,j)=>{const i=i0+j,sl=E?await encPart(f,i,nonce):f.slice(i*PART,(i+1)*PART);
-     const sha=await blobSafe(st.name,sl,fr=>{loaded[i]=fr*sl.size;show()});loaded[i]=sl.size;return{path:`c/${String(i).padStart(5,'0')}.bin`,sha,size:sl.size,i}}));
-    const c=await commitBatch(st,items);
-    for(const it of items)res[it.i]={o:S.me,r:st.name,c,p:it.path,size:it.size};
-    inRepo+=i1-i0;
-   }
+    if(el)el.innerHTML=`<div class="t">${E?'🔒 ':''}${esc(f.name)} — ${Math.round(s2/tot*100)}% · ${(sp/1e6).toFixed(1)} Mo/s · reste ${left>=3600?Math.floor(left/3600)+' h ':''}${left>=60?Math.floor(left%3600/60)+' min ':''}${left%60} s</div><progress value="${s2}" max="${tot}"></progress>`};
+   const worker=async()=>{for(;;){const i=next++;if(i>=n)return;const k=Math.floor(i/per),st=await repoP[k],
+     sl=E?await encPart(f,i,nonce):f.slice(i*PART,(i+1)*PART),sha=await blobSafe(st.name,sl,fr=>{loaded[i]=fr*sl.size;show()});
+     loaded[i]=sl.size;items[k].push({path:`c/${String(i).padStart(5,'0')}.bin`,sha,size:sl.size,i})}};
+   await Promise.all(Array.from({length:Math.min(E?4:CONC,n)},worker));
+   tEnd=Date.now();msg('Finalisation…');
+   await Promise.all(items.map(async(it,k)=>{const st=await repoP[k],c=await commitBatch(st,it);for(const x of it)res[x.i]={o:S.me,r:st.name,c,p:x.path,size:x.size}}));
    const th=await thP;
    await mut(d=>pr(d).assets.push({id:aid,parts:res,name:f.name,size:f.size,mime:f.type,enc:E?{n:b64u(nonce),bs:BS}:undefined,kind,by:S.me,at:Date.now(),th}),(kind=='final'?'Montage ajouté : ':'Rush ajouté : ')+f.name+(E?' 🔒':''));
-  }msg('Upload terminé')
+   const sec=(Date.now()-t0)/1000;msg(`Terminé : ${sz(f.size)} en ${sec.toFixed(0)} s (${(f.size/1e6/sec).toFixed(1)} Mo/s en moyenne)`);
+  }
  }catch(e){msg(e.message)}
 }
 async function blob(id){const r=await gh(`/repos/${S.repo}/releases/assets/${id}`,{headers:{Accept:'application/octet-stream'}});if(!r.ok)throw Error('Téléchargement impossible');return r.blob()}
@@ -244,7 +246,7 @@ async function vErr(id){
   $('#pl').innerHTML=`<video controls autoplay playsinline src="${URL.createObjectURL(b)}" style="width:100%"></video>`;msg('Mode secours actif')}catch(e){msg(e.message)}}
 async function diag(){
  const o=[],L=(k,v)=>{o.push(k+' : '+v);$('#dg').textContent=o.join('\n')};
- L('Version du panel','v5b — lecteur '+(typeof KINDS!='undefined'?'multi-méthodes (à jour)':'ANCIEN : reader.js pas à jour'));
+ L('Version du panel','v5c — lecteur '+(typeof KINDS!='undefined'?'multi-méthodes (à jour)':'ANCIEN : reader.js pas à jour'));
  L('Page sécurisée (https)',isSecureContext?'oui':'NON');L('Service worker supporté',('serviceWorker' in navigator)?'oui':'NON');
  const a=S.d.projects.flatMap(p=>p.assets).find(()=>true);
  if(!a)return L('Fichier de test',"aucun : uploade d'abord un petit fichier");
@@ -266,7 +268,7 @@ async function diag(){
 async function testStore(){
  const o=[],L=(k,v)=>{o.push(k+' : '+v);$('#dg').textContent=o.join('\n')};let st=null;
  try{
-  L('Version stockage','v5b (dépôts GitHub + raw.githubusercontent.com)');
+  L('Version stockage','v5c (dépôts GitHub + raw.githubusercontent.com)');
   st=await mkRepo('pnl-test-'+uid());L('1. Création d\'un dépôt de test','OK ('+st.name+')');
   const data=new Uint8Array(1048576);for(let i=0;i<data.length;i+=65536)crypto.getRandomValues(data.subarray(i,i+65536));const sha=await blobSafe(st.name,new Blob([data]),()=>{});
   const c=await commitBatch(st,[{path:'c/test.bin',sha}]);L('2. Envoi de 1 Mo (API Git)','OK');
