@@ -76,7 +76,7 @@ function thumb(f){return new Promise(r=>{
  v.onloadeddata=()=>{v.currentTime=Math.min(1,(v.duration||2)/2)};v.onseeked=()=>fin(draw(v,v.videoWidth,v.videoHeight));v.onerror=()=>fin('');v.src=u})}
 
 /* ---- fichiers (Releases GitHub) ---- */
-const PART=48*1048576,BS=1048576,BPP=48,parts=a=>a.parts||[{id:a.id,size:a.size}];
+const BS=1048576,psz=()=>Math.min(64,Math.max(4,Math.round(+localStorage.psz||32))),parts=a=>a.parts||[{id:a.id,size:a.size}];
 const b64u=u=>btoa(String.fromCharCode(...u));
 const encOn=()=>!!S.key&&localStorage.enc=='1';
 const syncCfg=()=>idbSet('cfg',{repo:S.repo,tok:S.tok,key:S.key||null});
@@ -94,11 +94,11 @@ async function kSet(){const pw=$('#kp').value;if(!pw)return;
   await kUse(pw);msg('Clé enregistrée sur cet appareil');render()}catch(e){msg(e.message)}}
 const keyH=()=>`<div class="c"><h3 style="margin-top:0">Chiffrement</h3><p class="t">${S.d.k?"Activé pour l'équipe. Entre le mot de passe sur chaque appareil.":"Désactivé. L'admin choisit un mot de passe d'équipe, stocké nulle part : s'il est perdu, les fichiers chiffrés sont irrécupérables."}</p>
  <div class="row"><input id="kp" type="password" style="flex:1" placeholder="Mot de passe d'équipe"><button class="b" onclick="kSet()">${S.d.k?'Déverrouiller':'Activer'}</button></div>
- ${S.key?`<label class="row" style="margin-top:10px"><input type="checkbox" style="width:auto" ${localStorage.enc=='1'?'checked':''} onchange="localStorage.enc=this.checked?'1':'0'"> Chiffrer les nouveaux uploads</label><div class="t">État : déverrouillé sur cet appareil</div>`:''}</div><div class="c"><h3 style="margin-top:0">Diagnostic lecture</h3><p class="t">Si la vidéo ne démarre pas, lance ce test et copie le résultat.</p><div class="row"><button class="g b" onclick="diag()">Lancer le test</button><button class="b" onclick="testStore()">Tester le stockage GitHub</button></div><pre id="dg" style="white-space:pre-wrap;font-size:.8rem;margin:10px 0 0"></pre></div><div class="c"><h3 style="margin-top:0">Vitesse d'envoi</h3><p class="t">Nombre de morceaux envoyés en même temps (1 à 24). Plus haut = plus rapide si ta connexion suit, mais plus de mémoire.</p><label class="row"><span class="t">Envois en parallèle</span><input type="number" min="1" max="24" style="width:90px" value="${Math.min(24,Math.max(1,+localStorage.conc||12))}" onchange="localStorage.conc=this.value"></label></div>`;
+ ${S.key?`<label class="row" style="margin-top:10px"><input type="checkbox" style="width:auto" ${localStorage.enc=='1'?'checked':''} onchange="localStorage.enc=this.checked?'1':'0'"> Chiffrer les nouveaux uploads</label><div class="t">État : déverrouillé sur cet appareil</div>`:''}</div><div class="c"><h3 style="margin-top:0">Diagnostic lecture</h3><p class="t">Si la vidéo ne démarre pas, lance ce test et copie le résultat.</p><div class="row"><button class="g b" onclick="diag()">Lancer le test</button><button class="b" onclick="testStore()">Tester le stockage GitHub</button></div><pre id="dg" style="white-space:pre-wrap;font-size:.8rem;margin:10px 0 0"></pre></div><div class="c"><h3 style="margin-top:0">Vitesse d'envoi</h3><p class="t">Nombre de chaînes d'envoi en parallèle (1 à 24). Plus haut = plus rapide si ta connexion suit, mais plus de mémoire. Le journal sert à comprendre un échec.</p><div class="row" style="margin-bottom:10px"><button class="g b" onclick="copyLog()">Copier le journal d'envoi</button></div><label class="row" style="margin-bottom:8px"><span class="t">Taille des morceaux (Mo, 4 à 64)</span><input type="number" min="4" max="64" style="width:90px" value="${psz()}" onchange="localStorage.psz=this.value"></label><label class="row"><span class="t">Envois en parallèle</span><input type="number" min="1" max="24" style="width:90px" value="${Math.min(24,Math.max(1,+localStorage.conc||8))}" onchange="localStorage.conc=this.value"></label></div>`;
 
-async function encPart(f,i,nonce){
- const s0=i*BPP*BS,e=Math.min(s0+BPP*BS,f.size),offs=[];for(let o=s0;o<e;o+=BS)offs.push(o);
- const bl=await Promise.all(offs.map(async(o,j)=>{const iv=new Uint8Array(12);iv.set(nonce);new DataView(iv.buffer).setUint32(8,i*BPP+j);
+async function encPart(f,i,nonce,bpp){
+ const s0=i*bpp*BS,e=Math.min(s0+bpp*BS,f.size),offs=[];for(let o=s0;o<e;o+=BS)offs.push(o);
+ const bl=await Promise.all(offs.map(async(o,j)=>{const iv=new Uint8Array(12);iv.set(nonce);new DataView(iv.buffer).setUint32(8,i*bpp+j);
   return crypto.subtle.encrypt({name:'AES-GCM',iv},S.key,await f.slice(o,Math.min(o+BS,e)).arrayBuffer())}));
  return new Blob(bl)}
 /* ---- stockage : dépôts GitHub publics (écriture via l'API Git, lecture via raw.githubusercontent.com) ---- */
@@ -132,29 +132,78 @@ async function commitBatch(st,items){
  await ghj(`/repos/${S.me}/${st.name}/git/refs/heads/${st.br}`,{sha:c.sha},'PATCH');
  st.head=c.sha;st.tree=t.sha;return c.sha;
 }
-const CAP=2.5*1024**3,CONCDEF=12;
+/* ---- envoi v2 : API "Contents" (1 requête = 1 partie = 1 commit), chaînes parallèles (1 dépôt par chaîne), reprise, journal ---- */
+const CAP=2.5*1024**3,CONCDEF=8;
+const ulog=t=>{try{const l=JSON.parse(localStorage.ulog||'[]');l.push(new Date().toLocaleTimeString('fr-FR')+'  '+t);localStorage.ulog=JSON.stringify(l.slice(-200))}catch{}};
+async function mkStore(name){
+ for(let t=0;t<5;t++){
+  const r=await gh('/user/repos',{method:'POST',body:JSON.stringify({name,description:'Stockage Panel',private:false,auto_init:true})});
+  if(r.ok||r.status==422)return;
+  ulog('création dépôt '+name+' : HTTP '+r.status);
+  if(r.status==403||r.status==429||r.status>=500){await sleep(5000*(t+1));continue}
+  throw Error('Création du dépôt impossible (HTTP '+r.status+'). Le token doit avoir le droit "repo".');
+ }
+ throw Error('Création du dépôt impossible : GitHub ne répond pas');
+}
+async function putPart(repo,path,sl,onp){
+ let b64=await toB64(sl);const body=new Blob(['{"message":"c","content":"',b64,'"}']);b64=null;
+ for(let t=0;t<7;t++){
+  if(S.cancel)throw Error('Envoi annulé');
+  try{return await new Promise((res,rej)=>{const x=new XMLHttpRequest();x.open('PUT',`${API}/repos/${S.me}/${repo}/contents/${path}`);
+    x.setRequestHeader('Authorization','Bearer '+S.tok);x.setRequestHeader('Accept','application/vnd.github+json');x.setRequestHeader('Content-Type','application/json');
+    x.upload.onprogress=e=>onp(e.loaded/e.total);
+    x.onload=()=>{let j={};try{j=JSON.parse(x.responseText)}catch{}
+     if(x.status<300&&j.commit)res(j.commit.sha);else rej(Object.assign(Error('HTTP '+x.status+(j.message?' — '+j.message:'')),{st:x.status}))};
+    x.onerror=()=>rej(Object.assign(Error('connexion coupée ou refusée'),{st:0}));x.send(body)})}
+  catch(e){
+   ulog(`${repo}/${path} essai ${t+1}/7 : ${e.message}`);
+   if(e.st==422){const r=await gh(`/repos/${S.me}/${repo}/commits?path=${path}&per_page=1`);if(r.ok){const l=await r.json();if(l[0])return l[0].sha}}
+   if(t==6||(e.st&&e.st<500&&![403,404,409,429].includes(e.st)))throw e;
+   let w=[3,8,20,40,60,90][t]||90;if(e.st==403||e.st==429)w=Math.max(w,60);
+   msg(`Nouvelle tentative (${e.message}) dans ${w} s…`);await sleep(w*1000)}
+ }
+}
 async function up(kind,files){
  if(!encOn()&&!S.okPub){if(!confirm("Sans chiffrement, tes fichiers seront PUBLICS sur GitHub (dépôts publics). Continuer ? Active le chiffrement dans Réglages pour les protéger."))return;S.okPub=1}
- try{
-  for(const f of files){
-   const t0=Date.now(),E=encOn(),nonce=E?crypto.getRandomValues(new Uint8Array(8)):null,pp=E?BPP*BS:PART,n=Math.max(1,Math.ceil(f.size/pp)),
-    tot=f.size+(E?Math.ceil(f.size/BS)*16:0),per0=Math.max(1,Math.floor(CAP/(pp+(E?BPP*16:0)))),nR=Math.ceil(n/per0),per=Math.ceil(n/nR),aid=uid()+uid(),conc=Math.min(24,Math.max(1,+localStorage.conc||CONCDEF));
-   const thP=thumb(f),repoP=Array.from({length:nR},(_,k)=>{const p=mkRepo(`pnl-${aid}-${k+1}`);p.catch(()=>{});return p});
-   const items=Array.from({length:nR},()=>[]),res=new Array(n),loaded=new Array(n).fill(0);let next=0,tEnd=0;
-   const show=()=>{const s2=loaded.reduce((x,y)=>x+y,0),sp=s2/((Date.now()-t0)/1000||1),left=sp>0?Math.round((tot-s2)/sp):0,el=$('#prog');
-    if(el)el.innerHTML=`<div class="t">${E?'🔒 ':''}${esc(f.name)} — ${Math.round(s2/tot*100)}% · ${(sp/1e6).toFixed(1)} Mo/s · reste ${left>=3600?Math.floor(left/3600)+' h ':''}${left>=60?Math.floor(left%3600/60)+' min ':''}${left%60} s</div><progress value="${s2}" max="${tot}"></progress>`};
-   const worker=async()=>{for(;;){const i=next++;if(i>=n)return;const k=Math.floor(i/per),st=await repoP[k],
-     sl=E?await encPart(f,i,nonce):f.slice(i*PART,(i+1)*PART),sha=await blobSafe(st.name,sl,fr=>{loaded[i]=fr*sl.size;show()});
-     loaded[i]=sl.size;items[k].push({path:`c/${String(i).padStart(5,'0')}.bin`,sha,size:sl.size,i})}};
-   await Promise.all(Array.from({length:Math.min(conc,n)},worker));
-   tEnd=Date.now();msg('Finalisation…');
-   await Promise.all(items.map(async(it,k)=>{const st=await repoP[k],c=await commitBatch(st,it);for(const x of it)res[x.i]={o:S.me,r:st.name,c,p:x.path,size:x.size}}));
-   const th=await thP;
-   await mut(d=>pr(d).assets.push({id:aid,parts:res,name:f.name,size:f.size,mime:f.type,enc:E?{n:b64u(nonce),bs:BS}:undefined,kind,by:S.me,at:Date.now(),th}),(kind=='final'?'Montage ajouté : ':'Rush ajouté : ')+f.name+(E?' 🔒':''));
-   const sec=(Date.now()-t0)/1000;msg(`Terminé : ${sz(f.size)} en ${sec.toFixed(0)} s (${(f.size/1e6/sec).toFixed(1)} Mo/s, ${Math.min(conc,n)} envois en parallèle)`);
-  }
- }catch(e){msg(e.message)}
+ S.cancel=0;
+ try{for(const f of files)await upOne(kind,f)}
+ catch(e){ulog('ERREUR : '+e.message);msg(e.message+(S.cancel?'':' — tu peux reprendre : renvoie le même fichier.'))}
 }
+async function upOne(kind,f){
+ const t0=Date.now(),E=encOn(),mb=psz(),pp=mb*BS,n=Math.max(1,Math.ceil(f.size/pp)),tot=f.size+(E?Math.ceil(f.size/BS)*16:0),
+  fp=`upr:${S.pid}|${f.name}|${f.size}|${f.lastModified}|${E?1:0}`,conc=Math.min(24,Math.max(1,+localStorage.conc||CONCDEF));
+ let st=null;try{st=JSON.parse(localStorage[fp]||'null')}catch{}
+ if(st&&(st.n!=n||!st.repos))st=null;
+ const thP=thumb(f);
+ if(!st){
+  const nch=Math.max(Math.min(n,conc),Math.ceil(tot/CAP)),aid=uid()+uid();
+  st={aid,n,nonce:E?b64u(crypto.getRandomValues(new Uint8Array(8))):null,repos:Array.from({length:nch},(_,k)=>`pnl-${aid}-${k+1}`),done:{}};
+  ulog(`début ${f.name} (${sz(f.size)}) : ${n} parties, ${nch} dépôts, chiffré=${E}`);
+  await Promise.all(st.repos.map(mkStore));localStorage[fp]=JSON.stringify(st);
+ }else ulog(`reprise ${f.name} : ${Object.keys(st.done).length}/${n} parties déjà envoyées`);
+ const nch=st.repos.length,nonce=E?b64d(st.nonce):null,loaded=new Array(n).fill(0);let base=0;
+ for(const i in st.done){loaded[i]=st.done[i].size;base+=st.done[i].size}
+ const queues=Array.from({length:nch},()=>[]);for(let i=0;i<n;i++)if(!st.done[i])queues[i%nch].push(i);
+ let last=0;
+ const show=(force)=>{const now=Date.now();if(!force&&now-last<250)return;last=now;
+  const s2=loaded.reduce((x,y)=>x+y,0),sp=(s2-base)/((now-t0)/1000||1),left=sp>0?Math.round((tot-s2)/sp):0,el=$('#prog');
+  if(el)el.innerHTML=`<div class="t">${E?'🔒 ':''}${esc(f.name)} — ${Math.round(s2/tot*100)}% · ${(sp/1e6).toFixed(1)} Mo/s · reste ${left>=3600?Math.floor(left/3600)+' h ':''}${left>=60?Math.floor(left%3600/60)+' min ':''}${left%60} s</div><progress value="${s2}" max="${tot}"></progress>
+   <div class="row" style="margin-top:8px"><button class="g b" onclick="S.cancel=1">Annuler</button><span class="t">${nch} chaînes en parallèle</span></div>`};
+ const chain=async k=>{for(const i of queues[k]){
+   if(S.cancel)throw Error('Envoi annulé');
+   const sl=E?await encPart(f,i,nonce,mb):f.slice(i*pp,(i+1)*pp),path=`c/${String(i).padStart(5,'0')}.bin`;
+   const c=await putPart(st.repos[k],path,sl,fr=>{loaded[i]=fr*sl.size;show()});
+   loaded[i]=sl.size;st.done[i]={r:st.repos[k],c,p:path,size:sl.size};try{localStorage[fp]=JSON.stringify(st)}catch{}
+   ulog(`partie ${i+1}/${n} OK (${st.repos[k]})`);show(true)}};
+ try{await Promise.all(Array.from({length:nch},(_,k)=>chain(k)))}catch(e){S.cancel=1;throw e}
+ const res=Array.from({length:n},(_,i)=>({o:S.me,...st.done[i]}));
+ const th=await thP;
+ await mut(d=>pr(d).assets.push({id:st.aid,parts:res,name:f.name,size:f.size,mime:f.type,enc:E?{n:st.nonce,bs:BS}:undefined,kind,by:S.me,at:Date.now(),th}),(kind=='final'?'Montage ajouté : ':'Rush ajouté : ')+f.name+(E?' 🔒':''));
+ localStorage.removeItem(fp);
+ const sec=(Date.now()-t0)/1000;ulog(`terminé ${f.name} en ${sec.toFixed(0)} s`);
+ msg(`Terminé : ${sz(f.size)} en ${sec.toFixed(0)} s (${(f.size/1e6/sec).toFixed(1)} Mo/s, ${nch} chaînes en parallèle)`);
+}
+async function copyLog(){const t=JSON.parse(localStorage.ulog||'[]').join('\n')||'(journal vide)';const el=$('#dg');if(el)el.textContent=t;try{await navigator.clipboard.writeText(t);msg('Journal copié')}catch{msg('Journal affiché ci-dessous : copie-le à la main')}}
 async function blob(id){const r=await gh(`/repos/${S.repo}/releases/assets/${id}`,{headers:{Accept:'application/octet-stream'}});if(!r.ok)throw Error('Téléchargement impossible');return r.blob()}
 async function swOk(){if(!('serviceWorker' in navigator))return false;
  try{await navigator.serviceWorker.register('sw.js');await navigator.serviceWorker.ready;
