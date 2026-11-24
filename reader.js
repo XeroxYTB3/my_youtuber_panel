@@ -26,20 +26,27 @@ async function viaKind(kind,cfg,p,lo,hi,sig){
  return c.subarray(lo,hi+1);
 }
 /* Parties stockées dans un dépôt GitHub public : lecture via raw.githubusercontent.com (sans jeton) */
-async function viaGit(p,lo,hi,sig){
+async function viaGit(p,lo,hi,sig,cfg){
  const u=`https://raw.githubusercontent.com/${p.o}/${p.r}/${p.c}/${p.p}`;
  let c=partCache.get(pk(p));
  if(!c){
-  const r=await fetch(u,{headers:{Range:`bytes=${lo}-${hi}`},signal:sig});
-  if(r.status==206)return new Uint8Array(await r.arrayBuffer());
-  if(r.status!=200)throw Error('statut HTTP '+r.status);
-  c=new Uint8Array(await r.arrayBuffer());partCache.set(pk(p),c);if(partCache.size>4)partCache.delete(partCache.keys().next().value);
+  let r=null,err=null;
+  try{r=await fetch(u,{headers:{Range:`bytes=${lo}-${hi}`},signal:sig})}catch(e){if(sig&&sig.aborted)throw e;err=e}
+  if(r&&r.status==206)return new Uint8Array(await r.arrayBuffer());
+  if(r&&r.status==200)c=new Uint8Array(await r.arrayBuffer());
+  else if(cfg&&cfg.tok){
+   /* secours : raw.githubusercontent.com injoignable ou refusé -> API Contents (CORS ok), partie entière */
+   const r2=await fetch(`https://api.github.com/repos/${p.o}/${p.r}/contents/${p.p}?ref=${p.c}`,{headers:{Authorization:'Bearer '+cfg.tok,Accept:'application/vnd.github.raw+json'},signal:sig});
+   if(!r2.ok)throw Error('raw : '+(r?'HTTP '+r.status:err.message)+' | api : HTTP '+r2.status);
+   c=new Uint8Array(await r2.arrayBuffer());
+  }else throw r?Error('statut HTTP '+r.status):err;
+  partCache.set(pk(p),c);if(partCache.size>4)partCache.delete(partCache.keys().next().value);
  }
  return c.subarray(lo,hi+1);
 }
 async function getRange(cfg,p,lo,hi,sig){
  if(p.r){
-  let err;for(let t=0;t<3;t++){try{return await viaGit(p,lo,hi,sig)}catch(e){if(sig&&sig.aborted)throw e;err=e;await new Promise(r=>setTimeout(r,400*(t+1)))}}
+  let err;for(let t=0;t<3;t++){try{return await viaGit(p,lo,hi,sig,cfg)}catch(e){if(sig&&sig.aborted)throw e;err=e;await new Promise(r=>setTimeout(r,400*(t+1)))}}
   throw Error('Lecture impossible ('+err.message+')');
  }
  const order=okKind?[okKind,...KINDS.filter(k=>k!=okKind)]:KINDS,errs=[];
