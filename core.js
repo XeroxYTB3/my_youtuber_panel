@@ -305,6 +305,13 @@ async function diag(){
  const a=S.d.projects.flatMap(p=>p.assets).find(()=>true);
  if(!a)return L('Fichier de test',"aucun : uploade d'abord un petit fichier");
  L('Fichier testé',a.name+(a.enc?' 🔒':'')+' ('+sz(a.size)+', '+parts(a).length+' partie(s))');
+ if(parts(a)[0].r){
+  const p0=parts(a)[0],u=`https://raw.githubusercontent.com/${p0.o}/${p0.r}/${p0.c}/${p0.p}`;
+  try{const r=await fetch(u,{headers:{Range:'bytes=0-99'}});L('raw.githubusercontent.com (plage)',r.status+(r.status==206?' OK':r.status==200?' OK sans plages':' ERREUR'))}
+  catch(e){L('raw.githubusercontent.com','INJOIGNABLE : '+e.message+' (bloqueur de pub / pare-feu ? le panel utilisera l\'API GitHub en secours)')}
+  try{const r=await gh(`/repos/${p0.o}/${p0.r}/contents/${p0.p}?ref=${p0.c}`,{headers:{Accept:'application/vnd.github.raw+json',Range:'bytes=0-99'}});L('API GitHub (secours)','statut '+r.status+(r.ok?' OK':' ERREUR'))}
+  catch(e){L('API GitHub (secours)','ERREUR : '+e.message)}
+ }else{
  try{const r=await fetch(`${API}/repos/${S.repo}/releases/assets/${parts(a)[0].id}`,{headers:{Authorization:'Bearer '+S.tok,Accept:'application/octet-stream',Range:'bytes=0-99'}});
   L('Plage via API GitHub',r.status+(r.status==206?' OK':' (attendu 206)'));
   if(r.status==206){const r2=await fetch(r.url,{headers:{Range:'bytes=100-199'}});L('Plage via lien signé',r2.status+(r2.status==206?' OK':' (attendu 206)'))}}
@@ -312,6 +319,7 @@ async function diag(){
  const cfg0={repo:S.repo,tok:S.tok,key:S.key||null},p0=parts(a)[0];
  for(const k of KINDS){try{const b=await viaKind(k,cfg0,p0,0,99);L('Méthode '+k,'OK ('+b.length+' octets)')}catch(e){L('Méthode '+k,'échec : '+e.message)}}
  try{const r=await fetch(`https://uploads.github.com/repos/${S.repo}/releases/1/assets?name=t`,{headers:{Authorization:'Bearer '+S.tok}});L('Upload direct navigateur (uploads.github.com)','joignable (statut '+r.status+')')}catch(e){L('Upload direct navigateur (uploads.github.com)','BLOQUÉ : '+e.message)}
+ }
  try{const g=await navigator.serviceWorker.getRegistration();L('Service worker enregistré',g?'oui ('+g.scope+')':'non');L('Service worker actif ici',navigator.serviceWorker.controller?'oui':'non (recharge la page)')}catch(e){L('Service worker',e.message)}
  if(a.enc)L('Clé de chiffrement',S.key?'chargée':'MANQUANTE');
  try{const o=await probe(a);L('Lecture du début du fichier',o.headErr?'ERREUR '+o.headErr:o.head+' octets, signature "'+o.sig+'" '+(/ftyp/.test(o.sig)?'(MP4 OK)':'(inattendue)'));L('Lecture de la fin du fichier',o.tailErr?'ERREUR '+o.tailErr:o.tail+' octets OK')}catch(e){L('Lecture des octets','ERREUR '+e.message)}
