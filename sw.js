@@ -1,8 +1,9 @@
-// v5
+// v5e
 /* Sert /_s/<id> au lecteur du navigateur : requêtes Range, déchiffrement, passage d'une partie à l'autre */
 importScripts('reader.js');
 self.addEventListener('install',()=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(clients.claim()));
+self.addEventListener('message',e=>{if(e.data==='claim')e.waitUntil(clients.claim())});
 self.addEventListener('fetch',e=>{
  const u=new URL(e.request.url),i=u.pathname.indexOf('/_s/');
  if(i<0)return;
