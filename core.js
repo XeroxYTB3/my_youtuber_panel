@@ -212,7 +212,10 @@ async function copyLog(){const t=JSON.parse(localStorage.ulog||'[]').join('\n')|
 async function blob(id){const r=await gh(`/repos/${S.repo}/releases/assets/${id}`,{headers:{Accept:'application/octet-stream'}});if(!r.ok)throw Error('Téléchargement impossible');return r.blob()}
 async function swOk(){if(!('serviceWorker' in navigator))return false;
  try{await navigator.serviceWorker.register('sw.js');await navigator.serviceWorker.ready;
-  if(!navigator.serviceWorker.controller)await Promise.race([new Promise(r=>navigator.serviceWorker.addEventListener('controllerchange',r,{once:true})),new Promise(r=>setTimeout(r,3000))]);
+  if(!navigator.serviceWorker.controller){
+   const w=Promise.race([new Promise(r=>navigator.serviceWorker.addEventListener('controllerchange',r,{once:true})),new Promise(r=>setTimeout(r,3000))]);
+   try{const g=await navigator.serviceWorker.ready;g.active&&g.active.postMessage('claim')}catch{} /* page rechargée avec Ctrl+F5 : on force la prise de contrôle */
+   await w}
   return !!navigator.serviceWorker.controller}catch{return false}}
 async function prep(a){const ps=parts(a);await idbSet('m:'+a.id,{size:a.size,mime:a.mime,parts:ps,enc:a.enc,encSize:ps.reduce((x,p)=>x+p.size,0)});await syncCfg();return{repo:S.repo,tok:S.tok,key:S.key||null}}
 const mmss=t=>Math.floor(t/60)+':'+String(t%60).padStart(2,'0');
