@@ -29,9 +29,10 @@ async function save(){
  S.sha=(await r.json()).content.sha;
 }
 async function mut(fn,label,pid){
- for(let i=0;i<3;i++){try{await load();fn(S.d);
+ for(let i=0;i<5;i++){try{await load();fn(S.d);
   if(label){S.d.log.unshift({at:Date.now(),by:S.me,t:label,p:pid||S.pid||''});S.d.log=S.d.log.slice(0,400)}
-  await save();return render()}catch(e){if(e.message!='conflit')return msg(e.message)}}
+  await save();render();return true}catch(e){if(e.message!='conflit'){ulog('mut : '+e.message);msg(e.message);return false}await sleep(400*(i+1)+Math.random()*400)}}
+ ulog('mut : conflit de sauvegarde persistant');msg('Sauvegarde impossible (conflit avec une autre modification) : réessaie dans un instant.');return false;
 }
 async function login(){
  S.repo=$('#rp')?$('#rp').value.trim():S.repo;S.tok=$('#tk')?$('#tk').value.trim():S.tok;
@@ -133,7 +134,7 @@ async function commitBatch(st,items){
  st.head=c.sha;st.tree=t.sha;return c.sha;
 }
 /* ---- envoi v2 : API "Contents" (1 requête = 1 partie = 1 commit), chaînes parallèles (1 dépôt par chaîne), reprise, journal ---- */
-const CAP=2.5*1024**3,CONCDEF=8;
+const CAP=2.5*1024**3,CONCDEF=4;
 const ulog=t=>{try{const l=JSON.parse(localStorage.ulog||'[]');l.push(new Date().toLocaleTimeString('fr-FR')+'  '+t);localStorage.ulog=JSON.stringify(l.slice(-200))}catch{}};
 async function mkStore(name){
  for(let t=0;t<5;t++){
@@ -179,6 +180,7 @@ async function upOne(kind,f){
   fp=`upr:${S.pid}|${f.name}|${f.size}|${f.lastModified}|${E?1:0}`,conc=Math.min(24,Math.max(1,+localStorage.conc||CONCDEF));
  let st=null;try{st=JSON.parse(localStorage[fp]||'null')}catch{}
  if(st&&(st.n!=n||!st.repos))st=null;
+ if(st){try{const chk=await Promise.all(st.repos.map(r=>gh(`/repos/${S.me}/${r}`)));if(chk.some(r=>r.status==404)){ulog('reprise abandonnée : dépôt de stockage introuvable, nouvel envoi complet');st=null;localStorage.removeItem(fp)}}catch{}}
  const thP=thumb(f);
  if(!st){
   const nch=Math.max(Math.min(n,conc),Math.ceil(tot/CAP)),aid=uid()+uid();
@@ -203,7 +205,8 @@ async function upOne(kind,f){
  try{await Promise.all(Array.from({length:nch},(_,k)=>chain(k)))}catch(e){S.cancel=1;throw e}
  const res=Array.from({length:n},(_,i)=>({o:S.me,...st.done[i]}));
  const th=await thP;
- await mut(d=>pr(d).assets.push({id:st.aid,parts:res,name:f.name,size:f.size,mime:f.type,enc:E?{n:st.nonce,bs:BS}:undefined,kind,by:S.me,at:Date.now(),th}),(kind=='final'?'Montage ajouté : ':'Rush ajouté : ')+f.name+(E?' 🔒':''));
+ const saved=await mut(d=>pr(d).assets.push({id:st.aid,parts:res,name:f.name,size:f.size,mime:f.type,enc:E?{n:st.nonce,bs:BS}:undefined,kind,by:S.me,at:Date.now(),th}),(kind=='final'?'Montage ajouté : ':'Rush ajouté : ')+f.name+(E?' 🔒':''));
+ if(!saved)throw Error('Fichier envoyé mais non enregistré dans le projet : renvoie le même fichier pour réessayer (aucune partie ne sera renvoyée).');
  localStorage.removeItem(fp);
  const sec=(Date.now()-t0)/1000;ulog(`terminé ${f.name} en ${sec.toFixed(0)} s`);
  msg(`Terminé : ${sz(f.size)} en ${sec.toFixed(0)} s (${(f.size/1e6/sec).toFixed(1)} Mo/s, ${nch} chaînes en parallèle)`);
@@ -350,3 +353,4 @@ async function testStore(){
  if(st){const x=await gh(`/repos/${S.me}/${st.name}`,{method:'DELETE'});L('4. Nettoyage du dépôt de test',x.ok?'OK':'à supprimer à la main ('+st.name+')')}
  L('Fin','copie ce texte et envoie-le moi');
 }
+window.addEventListener('unhandledrejection',e=>{try{const m=(e.reason&&e.reason.message)||String(e.reason);ulog('Erreur non gérée : '+m);msg('Erreur : '+m)}catch{}});
