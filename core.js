@@ -116,7 +116,7 @@ async function ghj(path,body,method='POST'){
 }
 function blobPost(r,body,onp){return new Promise((res,rej)=>{const x=new XMLHttpRequest();x.open('POST',`${API}/repos/${S.me}/${r}/git/blobs`);
  x.setRequestHeader('Authorization','Bearer '+S.tok);x.setRequestHeader('Accept','application/vnd.github+json');x.setRequestHeader('Content-Type','application/json');
- x.upload.onprogress=e=>onp(e.loaded/e.total);x.onload=()=>x.status<300?res(JSON.parse(x.responseText).sha):rej(Object.assign(Error('HTTP '+x.status),{st:x.status}));
+ x.upload.onprogress=e=>onp(e.loaded/e.total);x.onload=()=>{let j={};try{j=JSON.parse(x.responseText)}catch{}x.status<300?res(j.sha):rej(Object.assign(Error('HTTP '+x.status+(j.message?' — '+j.message:'')),{st:x.status}))};
  x.onerror=()=>rej(Error('Erreur réseau'));x.send(body)})}
 async function blobSafe(r,blob,onp){let b64=await toB64(blob);const body=new Blob(['{"encoding":"base64","content":"',b64,'"}']);b64=null;
  for(let t=0;t<6;t++){try{return await blobPost(r,body,onp)}catch(e){if(t==5||(e.st&&e.st<500&&e.st!=403&&e.st!=429))throw e;const w=20*(t+1);msg('Nouvelle tentative dans '+w+' s…');await sleep(w*1000)}}}
@@ -138,10 +138,14 @@ const ulog=t=>{try{const l=JSON.parse(localStorage.ulog||'[]');l.push(new Date()
 async function mkStore(name){
  for(let t=0;t<5;t++){
   const r=await gh('/user/repos',{method:'POST',body:JSON.stringify({name,description:'Stockage Panel',private:false,auto_init:true})});
-  if(r.ok||r.status==422)return;
-  ulog('création dépôt '+name+' : HTTP '+r.status);
+  if(r.ok)return;
+  let jm={};try{jm=await r.json()}catch{}
+  const em=(jm.message||'')+' '+JSON.stringify(jm.errors||'');
+  if(r.status==422&&/already exists/i.test(em))return;
+  ulog('création dépôt '+name+' : HTTP '+r.status+' '+em);
+  if(r.status==422)throw Error('Création du dépôt refusée (HTTP 422) : '+em.trim());
   if(r.status==403||r.status==429||r.status>=500){await sleep(5000*(t+1));continue}
-  throw Error('Création du dépôt impossible (HTTP '+r.status+'). Le token doit avoir le droit "repo".');
+  throw Error('Création du dépôt impossible (HTTP '+r.status+' '+(jm.message||'')+'). Le token doit avoir le droit "repo" (ou "Administration" en écriture pour un token fine-grained).');
  }
  throw Error('Création du dépôt impossible : GitHub ne répond pas');
 }
@@ -157,7 +161,8 @@ async function putPart(repo,path,sl,onp){
     x.onerror=()=>rej(Object.assign(Error('connexion coupée ou refusée'),{st:0}));x.send(body)})}
   catch(e){
    ulog(`${repo}/${path} essai ${t+1}/7 : ${e.message}`);
-   if(e.st==422){const r=await gh(`/repos/${S.me}/${repo}/commits?path=${path}&per_page=1`);if(r.ok){const l=await r.json();if(l[0])return l[0].sha}}
+   if(e.st==422){try{const r=await gh(`/repos/${S.me}/${repo}/commits?path=${path}&per_page=1`);if(r.ok){const l=await r.json();if(l[0])return l[0].sha}}catch{}}
+   if(e.st==422&&t>=2)throw e;
    if(t==6||(e.st&&e.st<500&&![403,404,409,429].includes(e.st)))throw e;
    let w=[3,8,20,40,60,90][t]||90;if(e.st==403||e.st==429)w=Math.max(w,60);
    msg(`Nouvelle tentative (${e.message}) dans ${w} s…`);await sleep(w*1000)}
