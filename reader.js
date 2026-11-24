@@ -75,7 +75,8 @@ async function fetchPlain(cfg,a,p,q,sig){
  if(!a.enc)return readRaw(cfg,a,p,q,sig);
  if(!cfg.key)throw Error('Clé de chiffrement manquante');
  const bs=a.enc.bs,EB=bs+16,b0=Math.floor(p/bs),b1=Math.floor(q/bs);
- const raw=await readRaw(cfg,a,b0*EB,Math.min((b1+1)*EB,a.encSize)-1,sig);
+ const encSize=a.encSize||(a.parts||[{size:a.size}]).reduce((x,p)=>x+p.size,0);
+ const raw=await readRaw(cfg,a,b0*EB,Math.min((b1+1)*EB,encSize)-1,sig);
  const plain=await decBlocks(cfg,a,raw,b0),o=p-b0*bs;
  return plain.subarray(o,o+(q-p+1));
 }
